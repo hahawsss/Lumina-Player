@@ -35,7 +35,12 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 |---|---|
 | ![AI 面板](assets/screenshots/ai.png) | ![存储面板](assets/screenshots/storage.png) |
 
+| 轨道与语言 | 播放设置 | 播放列表 |
+|---|---|---|
+| ![轨道](assets/screenshots/tracks.png) | ![设置](assets/screenshots/settings.png) | ![列表](assets/screenshots/playlist.png) |
+
 侧栏六个标签：轨道 / AI / 设置 / 列表 / 存储 / 网盘。低频动作收在下拉里，不做成一屏按钮。
+截图里的画面是 `scripts/make_shots.py` 用 ffmpeg 现造的合成测试片，不含任何真实影片。
 
 ---
 
