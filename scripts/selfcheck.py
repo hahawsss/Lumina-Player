@@ -437,6 +437,21 @@ def check_launcher() -> None:
                          capture_output=True, text=True, timeout=90)
     check("--check 跑通并报出实际会启动的 App",
           res.returncode == 0 and "Lumina.app" in res.stdout, res.stdout[-160:])
+    # 可分发打包必须自带隐私闸门：发出去的包里不许有凭据、用户名或编译痕迹
+    portable = (ROOT / "scripts" / "make_portable.sh").read_text(encoding="utf-8")
+    check("make_portable.sh 有隐私清理 + 出包前的隐私闸门",
+          "清掉包里的本机痕迹" in portable and "隐私闸门" in portable
+          and "__pycache__" in portable and "direct_url.json" in portable,
+          [k for k in ("清掉包里的本机痕迹", "隐私闸门", "__pycache__", "direct_url.json")
+           if k not in portable])
+    check("闸门探针用真实凭据值而不是字段名（字段名在我们源码里，会误杀每次构建）",
+          "x_storages" in portable and "Admin token" in portable
+          and 'b\'"cookie"\'' not in portable)
+    check("包内解释器不往 bundle 写字节码（否则清完又长回来）",
+          "PYTHONDONTWRITEBYTECODE=1" in portable)
+    gateway_script = (ROOT / "scripts" / "build_openlist.sh").read_text(encoding="utf-8")
+    check("网关构建信息不记录本机用户名/主机名",
+          "built_by" not in gateway_script, "built_by 会把 user@host 打进发布的 txt")
     # bundle 里的启动器同样要过 bash 3.2，并且必须导出内置网关的落点
     launcher = Path("/Applications/Lumina.app/Contents/MacOS/Lumina")
     if launcher.is_file():
@@ -630,6 +645,31 @@ def check_storage() -> None:
                 str(storage.openlist_dir(config) / "server.out")}
         check("台账把产出/缓存/日志/网关路径全部列出", need <= listed,
               sorted(need - listed))
+        # 分类：开发/分发产物单独一类，别混在「网关与日志」里
+        (fake / "distvenv").mkdir(parents=True, exist_ok=True)
+        (fake / "distvenv" / "python").write_bytes(b"0" * 512)
+        categories = [name for name, _items in storage.sections(config)]
+        check("台账按用途分类，开发产物单独一类「构建与分发」",
+              categories == ["软件数据根", "字幕产出", "缓存与标记", "网关与日志",
+                             "构建与分发"], categories)
+        build_labels = {item.label for name, items in storage.sections(config)
+                        if name == "构建与分发" for item in items}
+        check("「构建与分发」列出网关构建缓存与可分发打包运行时",
+              {"网关构建缓存", "可分发打包运行时"} <= build_labels, build_labels)
+        check("网关那一类不再混着构建缓存",
+              all("构建" not in item.label
+                  for name, items in storage.sections(config)
+                  if name == "网关与日志" for item in items))
+        count, _size = storage.preview("portable_venv", config)
+        check("可分发打包运行时能单独清（数得出里面几个文件）", count == 1, count)
+        check("可分发运行时与构建缓存都不进一键清理",
+              "portable_venv" not in storage.CLEAN_KEYS
+              and storage.BUILD_CACHE_KEY not in storage.CLEAN_KEYS)
+        storage.clean("portable_venv", config)
+        check("清完可分发运行时，台账里那一行就消失",
+              not any(item.label == "可分发打包运行时"
+                      for name, items in storage.sections(config)
+                      if name == "构建与分发" for item in items))
         check("每个可清理项都有对应的清理实现",
               all(item.clean in storage.ALL_CLEAN_KEYS
                   for _s, items in storage.sections(config) for item in items
@@ -872,9 +912,30 @@ def check_cloud_lifecycle() -> None:
               client.binary_origin() == "设置里指定的路径", client.binary_origin())
         config.set("cloud.openlist_binary", "")
         ledger = {str(item.path) for _s, items in storage.sections(config) for item in items}
-        check("存储台账列出 bundle 内网关与数据目录旧副本两个落点",
-              str(cloud.bundle_binaries()[0]) in ledger
-              and str(cloud.legacy_binary()) in ledger, sorted(ledger)[-4:])
+        check("存储台账列出 App 内置网关的落点",
+              str(cloud.bundle_binaries()[0]) in ledger, sorted(ledger)[-4:])
+        fake_legacy = fake_root / "旧版副本" / "openlist"
+        fake_legacy.parent.mkdir(parents=True, exist_ok=True)
+        saved_present, saved_path = (storage.gateway_legacy_present,
+                                     storage.gateway_legacy_path)
+        try:
+            storage.gateway_legacy_path = lambda: fake_legacy
+            storage.gateway_legacy_present = lambda: False
+            ledger = {str(item.path) for _s, items in storage.sections(config)
+                      for item in items}
+            check("旧副本已删掉时不再列一行假路径", str(fake_legacy) not in ledger)
+            fake_legacy.write_text("#!/bin/sh\n", encoding="utf-8")
+            storage.gateway_legacy_present = lambda: fake_legacy.is_file()
+            ledger = {str(item.path) for _s, items in storage.sections(config)
+                      for item in items}
+            check("旧副本还在时列出来并给清理入口",
+                  str(fake_legacy) in ledger
+                  and any(item.clean == storage.GATEWAY_LEGACY_KEY
+                          for _s, items in storage.sections(config) for item in items
+                          if str(item.path) == str(fake_legacy)))
+        finally:
+            storage.gateway_legacy_present = saved_present
+            storage.gateway_legacy_path = saved_path
         check("旧版网关不在一键清理范围内（可能正在跑）",
               storage.GATEWAY_LEGACY_KEY not in storage.CLEAN_KEYS
               and storage.GATEWAY_LEGACY_KEY in storage.ALL_CLEAN_KEYS)

@@ -193,7 +193,6 @@ frontend_tag  $WEB_TAG
 build_tags    $BUILD_TAGS
 go            $(go version)
 built_at      $BUILT_AT
-built_by      $(whoami)@$(hostname -s)
 rebuild       bash scripts/build_openlist.sh
 INFO
 say "构建信息 $OUT_DIR/build-info.txt"

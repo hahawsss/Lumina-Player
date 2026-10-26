@@ -1855,6 +1855,7 @@ class CloudManagePanel(QWidget):
     """OpenList 与 115 账户的软件内管理页：状态/启停、扫码登录、存储与缓存设置。"""
 
     status_ready = Signal(object)
+    status_failed = Signal(str)
     storage_ready = Signal(object)
     qr_ready = Signal(object)
     qr_state = Signal(str)
@@ -1979,6 +1980,7 @@ class CloudManagePanel(QWidget):
         outer.addWidget(_scroll(body))
 
         self.status_ready.connect(self._on_status)
+        self.status_failed.connect(self._on_status_failed)
         self.storage_ready.connect(self._on_storage)
         self.qr_ready.connect(self._on_qr_ready)
         self.qr_state.connect(self._set_login_text)
@@ -2004,7 +2006,9 @@ class CloudManagePanel(QWidget):
     def refresh(self, force: bool = False) -> None:
         if force:
             self._storage_loaded = False
-        self.status_label.setText("读取 OpenList 状态…")
+        # 先就地写明「用的是哪一份网关」，再去后台问运行状态：
+        # 端口/版本要等 HTTP，来源是本地文件检查，不该让人干等
+        self.status_label.setText(f"读取 OpenList 状态…\n网关程序：{self._binary_note()}")
         threading.Thread(target=self._load_status, daemon=True,
                          name="openlist-status").start()
 
@@ -2012,7 +2016,7 @@ class CloudManagePanel(QWidget):
         try:
             self.status_ready.emit(self.client.status())
         except Exception as exc:
-            self.qr_failed.emit(f"OpenList 状态读取失败：{exc}")
+            self.status_failed.emit(f"状态读取失败：{exc}")
 
     def _binary_note(self) -> str:
         """网关用的是哪一份、在哪 —— 回答「到底有没有内嵌」。"""
@@ -2020,6 +2024,10 @@ class CloudManagePanel(QWidget):
             return f"{self.client.binary_origin()} · {storage.display_path(Path(self.client.binary()))}"
         except cloud.CloudError as exc:
             return str(exc)
+
+    def _on_status_failed(self, text: str) -> None:
+        """状态读不出来也要落在状态行上，别让人对着一句「读取中…」干等。"""
+        self.status_label.setText(f"{text}\n网关程序：{self._binary_note()}")
 
     def _on_status(self, info: dict) -> None:
         self._status = info
@@ -2038,6 +2046,8 @@ class CloudManagePanel(QWidget):
         self.status_label.setToolTip(binary)
         self._update_buttons()
         if running and not self._storage_loaded:
+            # 存储配置要先取一次管理员 token（子进程），给个中间态别写着「未读取」干等
+            self.login_label.setText("读取 115 存储配置…")
             threading.Thread(target=self._load_storage, daemon=True,
                              name="openlist-storage").start()
         if not running:
@@ -2343,6 +2353,10 @@ CLEAN_CONSEQUENCES = {
     "language_hints": "每部片单独指定的识别语言 —— 删掉后回到自动检测。",
     "parts": "只删没下完的 .part 断点，已经下好的模型不动。",
     "logs": "应用日志清空、播放器日志删除；正在跑的进程会继续写。",
+    "build_cache": "编译网关用的 Go 工具链、源码与 module 缓存 —— "
+                   "删了下次跑 scripts/build_openlist.sh 要重新下载（约 20 分钟）。",
+    "portable_venv": "可分发打包用的独立 Python 环境（distvenv*）—— "
+                     "本机运行不依赖它，下次打可分发包会重建。",
 }
 
 
@@ -2669,6 +2683,11 @@ class CloudTab(QWidget):
         self.stack.setCurrentIndex(index)
         for button_index, button in enumerate(self.buttons):
             button.setChecked(button_index == index)
+        # 只从「网盘」整页进来才会走 on_show；在页内切分段开关也得触发一次读取，
+        # 否则服务页会一直停在初始的「读取状态…」不动
+        current = self.stack.widget(index)
+        if hasattr(current, "refresh"):
+            current.refresh()
 
     def on_show(self) -> None:
         current = self.stack.currentWidget()

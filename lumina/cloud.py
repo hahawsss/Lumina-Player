@@ -206,7 +206,7 @@ class OpenList:
             try:
                 proc = subprocess.run(
                     [self.binary(), "admin", "token", "--data", str(self.data_dir)],
-                    capture_output=True, text=True, timeout=30,
+                    capture_output=True, text=True, timeout=12,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise CloudError(f"读取 OpenList token 失败：{exc}") from exc

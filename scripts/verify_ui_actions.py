@@ -208,6 +208,27 @@ def main() -> int:
     # 收尾改回手动：这个测试进程没启动过网关，退出时不该动用户的实例
     manage.autostart_check.setChecked(False)
     manage._pick_autostart()
+    # 页内切分段开关也要触发状态读取：曾经点进「OpenList 服务」永远停在「读取状态…」
+    manage.status_label.setText("读取状态…")
+    window.sidebar.cloud.show_subpage(0)
+    settle(app, 0.2)
+    window.sidebar.cloud.show_subpage(1)
+    settle(app, 1.5)
+    expect("切到服务页就开始读状态，并立刻写明网关来源",
+           manage.status_label.text() != "读取状态…"
+           and "网关程序" in manage.status_label.text(),
+           manage.status_label.text()[:80])
+    saved_status = manage.client.status
+    manage.client.status = lambda: (_ for _ in ()).throw(RuntimeError("端口不通"))
+    manage.refresh()
+    settle(app, 1.5)
+    manage.client.status = saved_status
+    expect("状态读不出来时也写在状态行上（不许干等一句「读取中」）",
+           "状态读取失败" in manage.status_label.text()
+           and "网关程序" in manage.status_label.text(),
+           manage.status_label.text()[:80])
+    manage.refresh()
+    settle(app, 1.5)
     audio = tracks_panel.audio_combo
     expect("音轨下拉填了两条", audio.count() == 2, audio.count())
     expect("音轨下拉显示的就是 mpv 当前选中的轨",

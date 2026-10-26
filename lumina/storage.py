@@ -88,9 +88,34 @@ def gateway_legacy_path() -> Path:
     return cloud.legacy_binary()
 
 
+def gateway_legacy_present() -> bool:
+    """旧副本只在真的存在时才列进台账，删掉后别留一行假路径。"""
+    return gateway_legacy_path().is_file()
+
+
 def build_dir() -> Path:
     """编译网关用的缓存（Go 工具链 + 源码 + module），能整目录删掉。"""
     return Path(cfg.SUPPORT_DIR) / "build"
+
+
+def portable_venv_dirs() -> list[Path]:
+    """make_portable.sh 用的独立运行时（可分发打包），和软件自己那份 venv 不是一回事。
+
+    空壳目录不算：清完之后别在台账里留一行指向空气。
+    """
+    root = Path(cfg.SUPPORT_DIR)
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir()
+                  if p.is_dir() and p.name.startswith("distvenv") and any(p.iterdir()))
+
+
+def portable_packages() -> list[Path]:
+    """仓库 dist/ 里打好的可分发 zip；装好的 App 里跑就读不到，直接跳过。"""
+    repo_dist = Path(__file__).resolve().parents[1] / "dist"
+    if not repo_dist.is_dir():
+        return []
+    return sorted(repo_dist.glob("Lumina-*.zip"))
 
 
 def transcript_dir() -> Path:
@@ -107,6 +132,31 @@ def subtitle_root(config: cfg.Config) -> Path:
 
 def sections(config: cfg.Config) -> list[tuple[str, list[Target]]]:
     root = Path(cfg.SUPPORT_DIR)
+    gateway_rows = [
+        Target("OpenList 数据目录", openlist_dir(config), "115 登录状态、挂载配置"),
+        Target("OpenList 日志", openlist_dir(config) / "server.out"),
+        Target("网关程序（App 内置）", gateway_bundle_path(),
+               "编译进 Lumina.app 的那一份，随软件一起分发"),
+    ]
+    if gateway_legacy_present():
+        gateway_rows.append(
+            Target("网关程序（旧副本）", gateway_legacy_path(),
+                   "早先版本下载在数据目录里的；确认内置那份可用后可以删掉腾空间",
+                   clean="gateway_legacy"))
+    gateway_rows += [
+        Target("应用日志", cfg.APP_LOG_PATH, clean="logs"),
+        Target("播放器日志", cfg.LOG_PATH, "mpv 每次启动覆盖"),
+    ]
+    build_rows = [Target("网关构建缓存", build_dir(),
+                         "编译网关用的 Go 工具链、源码与 module 缓存；出过包就可以删，"
+                         "下次构建会重新拉", clean="build_cache")]
+    for venv in portable_venv_dirs():
+        build_rows.append(Target("可分发打包运行时", venv,
+                                 "make_portable.sh 建在数据目录里的独立 Python 环境；"
+                                 "删了下次打可分发包会重建", clean="portable_venv"))
+    for package in portable_packages():
+        build_rows.append(Target("可分发包", package,
+                                 "打好的 zip（发给别的机器用），删掉不影响本机运行"))
     return [
         ("软件数据根", [
             Target("应用数据目录", root, "模型、缓存、日志都在这儿"),
@@ -130,20 +180,8 @@ def sections(config: cfg.Config) -> list[tuple[str, list[Target]]]:
                    "每部片单独指定的识别语言", clean="language_hints"),
             Target("下载断点", cfg.MODEL_DIR, "没下完的 .part 文件", clean="parts"),
         ]),
-        ("网关与日志", [
-            Target("OpenList 数据目录", openlist_dir(config), "115 登录状态、挂载配置"),
-            Target("OpenList 日志", openlist_dir(config) / "server.out"),
-            Target("网关程序（App 内置）", gateway_bundle_path(),
-                   "编译进 Lumina.app 的那一份，随软件一起分发"),
-            Target("网关程序（旧副本）", gateway_legacy_path(),
-                   "早先版本下载在数据目录里的；确认内置那份可用后可以删掉腾空间",
-                   clean="gateway_legacy"),
-            Target("应用日志", cfg.APP_LOG_PATH, clean="logs"),
-            Target("播放器日志", cfg.LOG_PATH, "mpv 每次启动覆盖"),
-            Target("网关构建缓存", build_dir(),
-                   "编译网关用的 Go 工具链、源码与 module 缓存；出过包就可以删，"
-                   "下次构建会重新拉", clean="build_cache"),
-        ]),
+        ("网关与日志", gateway_rows),
+        ("构建与分发", build_rows),
     ]
 
 
@@ -448,6 +486,15 @@ def clean(key: str, config: cfg.Config, dry_run: bool = False) -> tuple[int, int
     if key == "build_cache":
         # 整个构建缓存目录清空（Go 工具链 + 源码 + module）；bundle 里那份不受影响
         return _remove_children(build_dir(), dry_run)
+    if key == "portable_venv":
+        # 可分发打包用的独立 venv：删了下次 make_portable.sh 会重建
+        removed = 0
+        freed = 0
+        for venv in portable_venv_dirs():
+            count, size = _remove_children(venv, dry_run)
+            removed += count
+            freed += size
+        return (removed, freed)
     if key == "gateway_legacy":
         path = gateway_legacy_path()
         try:
@@ -487,10 +534,12 @@ def clean(key: str, config: cfg.Config, dry_run: bool = False) -> tuple[int, int
 
 CLEAN_KEYS = ("live", "work", "transcripts", "translations", "language_hints",
               "parts", "logs")
-# 旧版网关二进制与网关构建缓存不进「一键清理」：前者可能正在跑，后者删了下次要重编 20 分钟
+# 旧版网关二进制、构建缓存与打包运行时都不进「一键清理」：
+# 前者可能正在跑，后两者删了下次要重编（20 分钟）/重建 venv，只能单独手删
 GATEWAY_LEGACY_KEY = "gateway_legacy"
 BUILD_CACHE_KEY = "build_cache"
-ALL_CLEAN_KEYS = CLEAN_KEYS + (GATEWAY_LEGACY_KEY, BUILD_CACHE_KEY)
+PORTABLE_VENV_KEY = "portable_venv"
+ALL_CLEAN_KEYS = CLEAN_KEYS + (GATEWAY_LEGACY_KEY, BUILD_CACHE_KEY, PORTABLE_VENV_KEY)
 
 
 def clean_all(config: cfg.Config, dry_run: bool = False) -> tuple[int, int]:

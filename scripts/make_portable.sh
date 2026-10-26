@@ -109,6 +109,8 @@ DIR="$(dirname "$0")"
 DIR="$(cd "$DIR/.." && pwd)"
 export LUMINA_APP_RES="$DIR/Resources"
 export PYTHONNOUSERSITE=1
+# 别往 bundle 里写 __pycache__：既保住 ad-hoc 签名不被自己改动破坏，也不让包内留下编译痕迹
+export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$DIR/Resources/pylibs"
 PY="$DIR/Resources/python/bin/python3.13"
 [ -x "$PY" ] || PY="$(ls "$DIR"/Resources/python/bin/python3.* 2>/dev/null | head -1)"
@@ -129,9 +131,14 @@ else
   echo "  ！没有内置网关（$GATEWAY），本次跳过；网盘功能退回外部二进制"
 fi
 
+# ---------------------------------------------------------------- 隐私清理
+# 见文件末尾：清理必须放在「导入自检 + 签名」之后 —— 自检一跑，包内解释器又会把
+# __pycache__ 写回来，先清等于没清。
+
 # ---------------------------------------------------------------- 自检 + 签名
 echo "→ 用包内的解释器做导入自检（cd / 跑：别让仓库目录里的 lumina/ 混进 sys.path）"
-( cd / && PYTHONPATH="$APP/Contents/Resources/pylibs" PYTHONNOUSERSITE=1 \
+( cd / && PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH="$APP/Contents/Resources/pylibs" \
   "$APP/Contents/Resources/python/bin/python3.13" -c \
   "import lumina, PySide6, httpx
 from PySide6.QtWidgets import QApplication
@@ -143,6 +150,101 @@ print('  ✓ PySide6', PySide6.__version__)" ) || { echo "✗ 包内导入自检
 echo "→ ad-hoc 签名（未公证，首次打开要右键→打开）"
 codesign --force --deep --sign - --timestamp=none "$APP" >/dev/null 2>&1 \
   && echo "  ✓ 已签名" || echo "  ！codesign 失败（未签名，Gatekeeper 会拦）"
+
+# ---------------------------------------------------------------- 隐私清理 + 闸门
+# 发出去的东西不许带「这台机器是谁、看过什么」：字节码里嵌着编译时的源码绝对路径，
+# uv 的 dist-info 里记着仓库在你家目录下的位置 —— 都不是密钥，但都是个人信息。
+echo "→ 清掉包里的本机痕迹"
+find "$APP" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find "$APP" \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \
+  -o -name 'direct_url.json' \) -delete 2>/dev/null || true
+if [ -f "$APP/Contents/Resources/openlist-build-info.txt" ]; then
+  grep -v '^built_by' "$APP/Contents/Resources/openlist-build-info.txt" > "$BUILD_DIR/bi" \
+    && mv "$BUILD_DIR/bi" "$APP/Contents/Resources/openlist-build-info.txt"
+fi
+# uv 把解释器装在你家目录下，这份 sysconfig 快照把安装前缀原样记了下来；
+# 运行时没人读它，换成中性占位即可。libpython3.13.dylib 里那份改不动（要动 install_name，
+# 会破签名），留给闸门当软提示。
+SYSCONFIG="$(ls "$APP"/Contents/Resources/python/lib/python3.*/_sysconfigdata__darwin_darwin.py 2>/dev/null | head -1)"
+if [ -n "$SYSCONFIG" ]; then
+  sed -i '' "s#$HOME/.local/share/uv#/opt/lumina-python#g" "$SYSCONFIG"
+fi
+echo "→ 改写后再冒烟一次（确认解释器没被改坏）"
+( cd / && PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+  "$APP/Contents/Resources/python/bin/python3.13" -c \
+  "import ssl, sqlite3, sysconfig; print('  ✓ 解释器仍可用', sysconfig.get_config_var('VERSION'))" ) \
+  || { echo "✗ 清理把解释器改坏了"; exit 1; }
+
+echo "→ 隐私闸门（有个人数据就不出包）"
+# 探针用**这台机器上真实存在的凭据值**，不是「cookie」这种字段名 —— 字段名在我们自己源码里，
+# 拿它当探针会把每一次正常构建都拦死。硬失败：真凭据、用户数据路径、仓库路径、编译痕迹；
+# 软提示：CPython 运行时自带的上游构建路径（改不动，也不含你的内容数据）。
+python3 - "$APP" "$SUPPORT" "$ROOT" "$HOME" <<'PY' || exit 1
+import json, sqlite3, subprocess, sys
+from pathlib import Path
+
+app, support, root, home = (Path(a) for a in sys.argv[1:5])
+secrets = {}
+db = support / "cloud/openlist/data.db"
+if db.is_file():
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        for (raw,) in con.execute("select addition from x_storages"):
+            acc = json.loads(raw or "{}")
+            for field in ("cookie", "qrcode_token"):
+                value = str(acc.get(field) or "")
+                if len(value) > 8:
+                    secrets[f"115 {field}"] = value[:32]
+    except sqlite3.Error as exc:
+        print(f"  ！读不到 data.db，凭据探针降级：{exc}")
+gateway = app / "Contents/Resources/bin/openlist"
+if gateway.is_file() and secrets:
+    try:
+        out = subprocess.run([str(gateway), "admin", "token", "--data",
+                              str(support / "cloud/openlist")],
+                             capture_output=True, text=True, timeout=20).stdout
+        token = next((line.split(":", 1)[1].strip() for line in out.splitlines()
+                      if line.startswith("Admin token:")), "")
+        if token:
+            secrets["OpenList 管理员 token"] = token[:32]
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  ！取不到管理员 token，这一项没验：{exc}")
+
+probes = {name: value.encode() for name, value in secrets.items()}
+probes.update({"用户数据目录": str(support).encode(), "仓库路径": str(root).encode()})
+name_marker = home.name.encode()
+hard, soft = [], 0
+for path in sorted(app.rglob("*")):
+    if not path.is_file():
+        continue
+    rel = str(path.relative_to(app))
+    if path.name.endswith((".pyc", ".pyo")) or "__pycache__" in rel \
+            or path.name == "direct_url.json":
+        hard.append(f"{rel}: 残留的编译痕迹")
+        continue
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        continue
+    hits = [label for label, probe in probes.items() if probe in blob]
+    if name_marker in blob:
+        hits.append("用户名/家目录")
+    if not hits:
+        continue
+    if rel.startswith("Contents/Resources/python/"):
+        soft += 1
+    else:
+        hard.append(f"{rel}: {', '.join(hits)}")
+print(f"  凭据探针：{len([k for k in probes if k.startswith(('115', 'OpenList'))])} 条真值 + 2 条路径")
+if soft:
+    print(f"  ！{soft} 个 CPython 运行时文件带上游构建路径（不含你的数据，改不动）")
+if hard:
+    print(f"✗ 包里发现 {len(hard)} 处本机痕迹：")
+    for line in hard[:20]:
+        print(f"    {line}")
+    sys.exit(1)
+print("  ✓ 载荷干净：无凭据真值、无用户数据路径、无仓库路径、无编译痕迹")
+PY
 
 echo "→ 打包 zip"
 rm -f "$ZIP"
