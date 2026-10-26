@@ -93,7 +93,7 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 
 ## 下载与安装
 
-去 [Releases](https://github.com/hahawsss/Lumina-Player/releases) 下载 `Lumina-0.1.0-macOS-arm64.zip`（约 190 MB，内含 Python 运行时、PySide6 与云盘网关），解压后把 `Lumina.app` 拖进「应用程序」。
+去 [Releases](https://github.com/hahawsss/Lumina-Player/releases) 下载 `Lumina-0.1.0-macOS-arm64.zip`（约 188 MB，内含 Python 运行时、PySide6 与云盘网关），解压后把 `Lumina.app` 拖进「应用程序」。
 
 > **第一次打开请右键 →「打开」**（没有 Apple 开发者签名与公证），或者：
 > ```bash
