@@ -53,6 +53,7 @@ class OpenList:
         self._token_lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
         self._adopted = False   # 启动时端口上已经有人：不是我们带起来的
+        self._quitting = False  # 已经走上退出路径：谁也不许再把网关拉回来
 
     @property
     def base(self) -> str:
@@ -133,6 +134,8 @@ class OpenList:
             return False
 
     def ensure_running(self) -> None:
+        if self._quitting:
+            raise CloudError("软件正在退出，不再带起网关")
         if self.healthy():
             if self._proc is None:
                 # 别人（另一个实例、或用户自己开的）已经开着了：认领下来，但退出时不去抢着停
@@ -142,15 +145,19 @@ class OpenList:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.data_dir / "server.out"
         with log_path.open("a", encoding="utf-8") as log:
-            self._proc = subprocess.Popen(
+            proc = subprocess.Popen(
                 [binary, "server", "--data", str(self.data_dir), "--log-std"],
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
             )
+        self._proc = proc
         self._adopted = False
         deadline = time.time() + 20.0
         while time.time() < deadline:
-            if self._proc.poll() is not None:
-                raise CloudError(f"OpenList 启动失败（退出码 {self._proc.returncode}）")
+            # 等健康探测期间用户关了窗：shutdown 路径会 terminate 并清空 _proc，这里再摸它就是 None.poll()
+            if self._proc is not proc:
+                return
+            if proc.poll() is not None:
+                raise CloudError(f"OpenList 启动失败（退出码 {proc.returncode}）")
             if self.healthy():
                 return
             time.sleep(0.3)
@@ -194,6 +201,7 @@ class OpenList:
 
     def shutdown_for_quit(self) -> None:
         """关窗路径上的快速停机：只等一小会儿，绝不把退出卡在健康探测上。"""
+        self._quitting = True
         if not self.should_stop_on_quit():
             return
         self.stop_server(patience=1.5)

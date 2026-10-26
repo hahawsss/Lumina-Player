@@ -21,6 +21,11 @@ ARCH="$(uname -m)"
 BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lumina-portable-XXXXXX")"
 APP="$BUILD_DIR/Lumina.app"
 ZIP="$ROOT/dist/Lumina-${VERSION}-macOS-${ARCH}.zip"
+# 一份构建目录 564 MB：不清的话跑十次就吃掉 5.6 GB（磁盘只剩 8 GB 时这会直接让下次构建炸掉）。
+# KEEP_BUILD=1 留着调试。
+if [ "${KEEP_BUILD:-0}" != "1" ]; then
+  trap 'rm -rf "$BUILD_DIR"' EXIT
+fi
 
 command -v uv >/dev/null || { echo "✗ 缺少 uv"; exit 1; }
 [ -x "$DISTVENV/bin/python" ] || { echo "✗ 缺少分发用环境 $DISTVENV"; exit 1; }
@@ -40,6 +45,13 @@ SITE="$(ls -d "$DISTVENV"/lib/python3.*/site-packages | head -1)"
 cp -R "$SITE" "$APP/Contents/Resources/pylibs"
 SP_VER="$(basename "$(dirname "$SITE")")"
 echo "  $SP_VER · $(du -sh "$APP/Contents/Resources/pylibs" | cut -f1)"
+
+# site-packages 里那份 lumina 是上次 `uv pip install .` 的快照，不重装就永远是旧的：
+# 实测有一次出包，包内 cloud.py/storage.py/panels.py/main_window.py 四个文件比仓库落后两小时。
+# 打包这一步以仓库源码为准，直接把包内那份整体换掉 —— 别的依赖仍然走 site-packages。
+echo "→ 用仓库源码替换包内 lumina"
+rm -rf "$APP/Contents/Resources/pylibs/lumina"
+cp -R "$ROOT/lumina" "$APP/Contents/Resources/pylibs/lumina"
 
 # ---------------------------------------------------------------- 图标
 ICON_SRC="$ROOT/assets/AppIcon-1024.png"
@@ -276,10 +288,13 @@ LINKS_OUT=$(find "$EXTRACTED" -type l | wc -l | tr -d ' ')
   "import lumina, PySide6
 assert '/Lumina.app/' in lumina.__file__, '解包后 import 到了包外：' + lumina.__file__" ) \
   || fail "解包后的包内解释器跑不起来"
+STALE="$(diff -rq -x '__pycache__' -x '*.pyc' -x '.DS_Store' \
+         "$ROOT/lumina" "$EXTRACTED/Contents/Resources/pylibs/lumina" 2>&1 | head -3)"
+[ -z "$STALE" ] || fail "包里的 lumina 和仓库源码对不上：$STALE"
 rm -rf "$CHECK"
-echo "  ✓ 密封完好 · 软链接 $LINKS_OUT/$LINKS_SRC · 启动器与网关可执行 · 包内解释器可用"
+echo "  ✓ 密封完好 · 软链接 $LINKS_OUT/$LINKS_SRC · 启动器与网关可执行 · 包内解释器可用 · 包内源码与仓库逐文件一致"
 echo "  ✓ $ZIP $(du -h "$ZIP" | cut -f1)"
 echo
-echo "✓ 完成（构建目录 ${APP}）"
+echo "✓ 完成（构建目录 $(du -sh "$APP" | cut -f1) 已随本次退出回收；KEEP_BUILD=1 可留着调试）"
 echo "  App 体积 $(du -sh "$APP" | cut -f1)（内含 Python 运行时 + PySide6 + 云盘网关）"
 echo "  mpv / ffmpeg / whisper-cli 仍由 brew 提供，首次打开时应用内自检会提示安装"

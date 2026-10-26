@@ -8,7 +8,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![内核](https://img.shields.io/badge/播放内核-libmpv%20%2B%20VideoToolbox-orange)
 ![授权](https://img.shields.io/badge/license-GPL--3.0-blue)
-![检查](https://img.shields.io/badge/自检-279%20项通过-brightgreen)
+![检查](https://img.shields.io/badge/自检-281%20项通过-brightgreen)
 
 </div>
 
@@ -87,7 +87,7 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 - **存储台账**：每个产出、下载、缓存落在哪儿、占多大、能不能删，全在「存储」栏，按 *软件数据根 / 字幕产出 / 缓存与标记 / 网关与日志 / 构建与分发* 分类，每行都能"打开"进 Finder。**删除范围锁死在软件自己的数据目录内**，路径全部由代码算出，不写死常量。
 - **模型可以删**：转写与翻译模型逐个列出体积、标出"正在被谁用"，删除要确认、有任务在跑时拒绝；删掉在用的模型会自动改用替补并同步界面。
 - **崩溃可查**：应用日志、播放器日志、网关日志都有路径可点，异常都写文件（GUI 应用没有控制台）。
-- **有判据**：`scripts/selfcheck.py` 279 项结构自检（含硬解、内嵌、代理、语言识别、存储与隐私），另有 6 套端到端验证套件。
+- **有判据**：`scripts/selfcheck.py` 281 项结构自检（含硬解、内嵌、代理、语言识别、存储与隐私），另有 6 套端到端验证套件。
 
 ---
 
@@ -118,8 +118,8 @@ cd Lumina-Player && ./start.sh            # 体检 → 建运行时 → 起播�
 ```bash
 ./scripts/build_openlist.sh   # 从源码编译云盘网关（钉版本，产物进构建缓存）
 ./scripts/make_app.sh         # 本机自用 .app：装进 /Applications，含上面的网关
-./scripts/make_portable.sh    # 可分发 .app + zip（自带 Python 运行时）
-./scripts/verify_all.sh       # 六套验证 + 279 项自检
+./scripts/make_portable.sh    # 可分发 .app + zip（自带 Python 运行时；出包前强制解包复检签名与源码一致性）
+./scripts/verify_all.sh       # 六套验证 + 281 项自检
 ./scripts/make_shots.py       # 重新生成 README 截图（只用合成素材）
 ```
 

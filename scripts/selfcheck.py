@@ -856,6 +856,50 @@ def check_cloud_lifecycle() -> None:
     client._adopted = False
     check("自己带起来的网关退出时必须收掉（自动模式）", client.should_stop_on_quit())
 
+    # 启动等待和关窗撞车：等待循环里再摸 self._proc 就是 None.poll()，
+    # 线程炸在 stderr，用户只看到「开了就退」+ 一个没人管的网关
+    race = cloud.OpenList(config)
+    race.healthy = lambda: False
+    race.pids = lambda: []
+    race.binary = lambda: "/bin/echo"
+    fake = FakeProc()
+    real_popen = cloud.subprocess.Popen
+    errors: list[BaseException] = []
+
+    def run_race() -> None:
+        try:
+            race.ensure_running()
+        except BaseException as exc:  # noqa: BLE001 —— 自检就是要抓住任何异常
+            errors.append(exc)
+
+    cloud.subprocess.Popen = lambda *a, **k: fake
+    thread = threading.Thread(target=run_race)
+    try:
+        thread.start()
+        time.sleep(0.2)          # 让线程先进到等待循环
+        race.shutdown_for_quit()  # 模拟「刚带起来就关窗」
+        thread.join(3.0)
+    finally:
+        cloud.subprocess.Popen = real_popen
+    check("启动等待中被人关窗：线程不炸、立刻收手、子进程照样收掉",
+          not errors and not thread.is_alive() and fake.terminated,
+          errors[:1] or ("线程还活着" if thread.is_alive() else ""))
+    # 关窗后 autostart 线程还会接着要 token → 又会走一遍 ensure_running；
+    # 不设闸门的话这里能把网关第二次拉起来，变成一个没人管的孤儿进程
+    spawned_again = []
+    cloud.subprocess.Popen = lambda *a, **k: spawned_again.append(a) or fake
+    try:
+        try:
+            race.ensure_running()
+            blocked = ""
+        except Exception as exc:      # noqa: BLE001 —— 逃逸的异常本身就是要抓的东西
+            blocked = f"{type(exc).__name__}: {exc}"
+    finally:
+        cloud.subprocess.Popen = real_popen
+    check("退出路径走过之后绝不再带起网关",
+          not spawned_again and blocked.startswith("CloudError") and "退出" in blocked,
+          blocked or "又拉起来一次")
+
     # 换血判定：端口上跑的不是我们要用的那一份时，自动模式要切过来
     # （用单独的实例，别把上面那组 fake 方法污染到后面的解析测试）
     mig = cloud.OpenList(config)

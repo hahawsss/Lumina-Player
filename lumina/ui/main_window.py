@@ -139,7 +139,11 @@ class MainWindow(QMainWindow):
     def _autostart_cloud(self) -> None:
         """启动期把 OpenList 带起来；失败只说明一次，本地播放照旧。"""
         def worker() -> None:
-            ok, message = self.cloud_client.autostart()
+            try:
+                ok, message = self.cloud_client.autostart()
+            except Exception as exc:
+                # 后台线程里没人接的异常等于静默失败：网关没起来，界面一句提示都没有
+                ok, message = False, f"OpenList 启动过程出错：{type(exc).__name__}: {exc}"
             cfg.append_log(message)
             if not ok:
                 self.cloud_service_note.emit(message)
