@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# 构建产物
+build/
+dist/
+*.spec
+
+# macOS 垃圾
+.DS_Store
+.AppleDouble
+._*
+
+# 本地备份与日志
+backups/
+*-backups/
+*.log
+
+# 大文件不进 Git（GitHub 单文件上限 100MB），一律走 Releases 资产分发
+*.zip
+*.tar.gz
+*.dmg
+*.pkg
+*.fpk
