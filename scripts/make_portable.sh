@@ -147,10 +147,6 @@ assert '/pylibs/' in lumina.__file__, 'import 到了包外的 lumina： ' + lumi
 print('  ✓ lumina', lumina.__file__)
 print('  ✓ PySide6', PySide6.__version__)" ) || { echo "✗ 包内导入自检没过"; exit 1; }
 
-echo "→ ad-hoc 签名（未公证，首次打开要右键→打开）"
-codesign --force --deep --sign - --timestamp=none "$APP" >/dev/null 2>&1 \
-  && echo "  ✓ 已签名" || echo "  ！codesign 失败（未签名，Gatekeeper 会拦）"
-
 # ---------------------------------------------------------------- 隐私清理 + 闸门
 # 发出去的东西不许带「这台机器是谁、看过什么」：字节码里嵌着编译时的源码绝对路径，
 # uv 的 dist-info 里记着仓库在你家目录下的位置 —— 都不是密钥，但都是个人信息。
@@ -174,6 +170,17 @@ echo "→ 改写后再冒烟一次（确认解释器没被改坏）"
   "$APP/Contents/Resources/python/bin/python3.13" -c \
   "import ssl, sqlite3, sysconfig; print('  ✓ 解释器仍可用', sysconfig.get_config_var('VERSION'))" ) \
   || { echo "✗ 清理把解释器改坏了"; exit 1; }
+
+# ---------------------------------------------------------------- 签名
+# 必须排在隐私清理之后：codesign 把「签名那一刻存在的每个文件」逐一记进资源密封，
+# 之后再删 __pycache__、改 _sysconfigdata、剥 built_by 就等于事后改包 —— 密封立刻失效，
+# 别人下载解压后 Gatekeeper 报「Lumina 已损坏，无法打开」，连右键→打开都救不了。
+echo "→ ad-hoc 签名（未公证，首次打开要右键→打开）"
+codesign --force --deep --sign - --timestamp=none "$APP" >/dev/null 2>&1 \
+  || { echo "✗ codesign 失败（未签名，Gatekeeper 会拦）"; exit 1; }
+codesign --verify "$APP" >/dev/null 2>&1 \
+  || { echo "✗ 签完自检没过：$(codesign --verify "$APP" 2>&1 | head -1)"; exit 1; }
+echo "  ✓ 已签名，资源密封完好"
 
 echo "→ 隐私闸门（有个人数据就不出包）"
 # 探针用**这台机器上真实存在的凭据值**，不是「cookie」这种字段名 —— 字段名在我们自己源码里，
@@ -248,7 +255,29 @@ PY
 
 echo "→ 打包 zip"
 rm -f "$ZIP"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+ditto -c -k --keepParent --norsrc --noextattr "$APP" "$ZIP"
+
+echo "→ 把刚打好的包解开复检（发出去的就是这一份）"
+CHECK="$(mktemp -d "${TMPDIR:-/tmp}/lumina-zipcheck-XXXXXX")"
+ditto -x -k "$ZIP" "$CHECK"
+EXTRACTED="$CHECK/Lumina.app"
+fail() { echo "✗ $1"; rm -rf "$CHECK"; exit 1; }
+[ -d "$EXTRACTED" ] || fail "解压后没有 Lumina.app"
+codesign --verify "$EXTRACTED" >/dev/null 2>&1 \
+  || fail "解包后签名密封失效：$(codesign --verify "$EXTRACTED" 2>&1 | head -1)"
+LINKS_SRC=$(find "$APP" -type l | wc -l | tr -d ' ')
+LINKS_OUT=$(find "$EXTRACTED" -type l | wc -l | tr -d ' ')
+[ "$LINKS_SRC" = "$LINKS_OUT" ] || fail "软链接丢了：包内 $LINKS_SRC 个，解压后只剩 $LINKS_OUT 个"
+[ -x "$EXTRACTED/Contents/MacOS/Lumina" ] || fail "启动器丢了可执行位"
+[ -x "$EXTRACTED/Contents/Resources/bin/openlist" ] || fail "内置网关丢了可执行位"
+( cd / && PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONPATH="$EXTRACTED/Contents/Resources/pylibs" \
+  "$EXTRACTED/Contents/Resources/python/bin/python3.13" -c \
+  "import lumina, PySide6
+assert '/Lumina.app/' in lumina.__file__, '解包后 import 到了包外：' + lumina.__file__" ) \
+  || fail "解包后的包内解释器跑不起来"
+rm -rf "$CHECK"
+echo "  ✓ 密封完好 · 软链接 $LINKS_OUT/$LINKS_SRC · 启动器与网关可执行 · 包内解释器可用"
 echo "  ✓ $ZIP $(du -h "$ZIP" | cut -f1)"
 echo
 echo "✓ 完成（构建目录 ${APP}）"
