@@ -1,5 +1,7 @@
 # Lumina Player
 
+**中文** · [English](README.en.md)
+
 一个 macOS 本地视频播放器：打开就能看，字幕自己认，外语片自己听出来再翻，片子放在 115 网盘里也能直接播。
 
 <div align="center">
