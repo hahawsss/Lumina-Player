@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from . import asr, config as cfg, engine as mpv_engine, translate
+from . import asr, config as cfg, engine as mpv_engine, i18n, translate
 
 
 @dataclass
@@ -56,25 +56,26 @@ def check(config: cfg.Config) -> list[Item]:
         from . import mpv_lib
         try:
             path = mpv_lib.libmpv_path(config)
-            items.append(Item("mpv", "播放引擎 libmpv", True, Path(path).name))
+            items.append(Item("mpv", i18n.t("播放引擎 libmpv"), True, Path(path).name))
         except Exception as exc:
-            items.append(Item("mpv", "播放引擎 libmpv", False, str(exc), "mpv"))
-        items.append(Item("embed", "画面呈现方式", True, "画进本窗口（GL 内嵌）", "",
+            items.append(Item("mpv", i18n.t("播放引擎 libmpv"), False, str(exc), "mpv"))
+        items.append(Item("embed", i18n.t("画面呈现方式"), True, i18n.t("画进本窗口（GL 内嵌）"), "",
                           required=False))
         return _check_rest(items, config)
 
     try:
-        items.append(Item("mpv", "播放引擎 mpv", True, mpv_engine.find_mpv_binary()))
+        items.append(Item("mpv", i18n.t("播放引擎 mpv"), True, mpv_engine.find_mpv_binary()))
     except mpv_engine.MpvError as exc:
-        items.append(Item("mpv", "播放引擎 mpv", False, str(exc), "mpv"))
+        items.append(Item("mpv", i18n.t("播放引擎 mpv"), False, str(exc), "mpv"))
 
     binary = mpv_engine.find_mpv_binary(config)
     embeddable = mpv_engine.can_embed(binary)
     pinned = bool(config.get("player.pin_window", True))
     items.append(Item(
-        "embed", "画面呈现方式", embeddable or pinned,
-        "内嵌进本窗口" if embeddable else
-        (Path(binary).name + (" · 独立播放窗，已贴合视频区" if pinned else " · 独立播放窗，未贴合")),
+        "embed", i18n.t("画面呈现方式"), embeddable or pinned,
+        i18n.t("内嵌进本窗口") if embeddable else
+        (Path(binary).name + i18n.t(" · 独立播放窗，已贴合视频区" if pinned
+                                    else " · 独立播放窗，未贴合")),
         "", required=False))
     return _check_rest(items, config)
 
@@ -91,49 +92,51 @@ def _whisper_installed(config: cfg.Config) -> bool:
 def _check_rest(items: list[Item], config: cfg.Config) -> list[Item]:
     for name, label in (("ffmpeg", "音频抽取 ffmpeg"), ("ffprobe", "流探测 ffprobe")):
         found = find_tool(name)
-        items.append(Item(name, label, bool(found), found or "未找到", "ffmpeg"))
+        items.append(Item(name, i18n.t(label), bool(found), found or i18n.t("未找到"), "ffmpeg"))
 
     try:
         ok, message = asr.availability_cached(config)
-        items.append(Item("whisper", "语音转字幕 whisper.cpp", ok, message,
+        items.append(Item("whisper", i18n.t("语音转字幕 whisper.cpp"), ok, message,
                           "" if _whisper_installed(config) else "whisper-cpp",
                           required=False))
     except asr.AsrError as exc:
-        items.append(Item("whisper", "语音转字幕 whisper.cpp", False, str(exc), "whisper-cpp",
-                          required=False))
+        items.append(Item("whisper", i18n.t("语音转字幕 whisper.cpp"), False, str(exc),
+                          "whisper-cpp", required=False))
 
     models = asr.list_models()
-    items.append(Item("model", "转写模型", bool(models),
-                      ", ".join(models) if models else "未下载（AI 面板里可下载）",
+    items.append(Item("model", i18n.t("转写模型"), bool(models),
+                      ", ".join(models) if models else i18n.t("未下载（AI 面板里可下载）"),
                       "", required=False))
 
     binary = translate.find_llama_binary(config)
     llm_model = str(config.get("translate.llama_model", "") or "")
     ready = translate.llm_model_ready(llm_model)
     if binary and ready:
-        detail = f"llama-server 就绪 · {llm_model}"
+        detail = i18n.t("llama-server 就绪 · {}", llm_model)
     elif binary:
-        detail = f"已装 llama.cpp，缺模型 {llm_model}（AI 面板里点下载）"
+        detail = i18n.t("已装 llama.cpp，缺模型 {}（AI 面板里点下载）", llm_model)
     else:
-        detail = "未安装：离线翻译不可用（brew install llama.cpp）"
-    items.append(Item("llama", "本地翻译 llama.cpp", bool(binary) and ready, detail,
+        detail = i18n.t("未安装：离线翻译不可用（brew install llama.cpp）")
+    items.append(Item("llama", i18n.t("本地翻译 llama.cpp"), bool(binary) and ready, detail,
                       "" if binary else "llama.cpp", required=False))
 
     has_key = bool(cfg.secret_get("openai") or cfg.secret_get("deepl"))
-    items.append(Item("key", "翻译密钥", has_key,
-                      "已配置" if has_key else "未配置：翻译不可用（设置里填，或环境变量 LUMINA_OPENAI_KEY）",
+    items.append(Item("key", i18n.t("翻译密钥"), has_key,
+                      i18n.t("已配置") if has_key else
+                      i18n.t("未配置：翻译不可用（设置里填，或环境变量 LUMINA_OPENAI_KEY）"),
                       "", required=False))
     return items
 
 
 def summarize(items: list[Item]) -> str:
+    sep = "、" if i18n.current() == "zh" else ", "
     blocked = [item.label for item in items if item.required and not item.ok]
     if blocked:
-        return "缺少必需组件：" + "、".join(blocked)
+        return i18n.t("缺少必需组件：{}", sep.join(blocked))
     optional = [item.label for item in items if not item.required and not item.ok]
     if optional:
-        return "可以播放；这些功能待补：" + "、".join(optional)
-    return "环境完整，全部功能可用"
+        return i18n.t("可以播放；这些功能待补：{}", sep.join(optional))
+    return i18n.t("环境完整，全部功能可用")
 
 
 class Installer(QObject):
@@ -159,10 +162,10 @@ class Installer(QObject):
         formulas = self.formulas(items)
         brew = brew_path()
         if not formulas:
-            self.done.emit(True, "没有需要安装的组件")
+            self.done.emit(True, i18n.t("没有需要安装的组件"))
             return False
         if not brew:
-            self.done.emit(False, "没找到 Homebrew，无法自动安装。先装 brew：https://brew.sh")
+            self.done.emit(False, i18n.t("没找到 Homebrew，无法自动安装。先装 brew：https://brew.sh"))
             return False
         if self.running():
             return False
@@ -179,7 +182,7 @@ class Installer(QObject):
                                               stderr=subprocess.STDOUT, text=True,
                                               env=env, bufsize=1)
             except OSError as exc:
-                self.done.emit(False, f"启动 brew 失败：{exc}")
+                self.done.emit(False, i18n.t("启动 brew 失败：{}", exc))
                 return
             tail: list[str] = []
             assert self._proc.stdout is not None
@@ -194,11 +197,12 @@ class Installer(QObject):
                     self.line.emit(text)
             code = self._proc.wait()
             if self._cancel.is_set():
-                self.done.emit(False, "已取消安装")
+                self.done.emit(False, i18n.t("已取消安装"))
             elif code == 0:
-                self.done.emit(True, "安装完成：" + ", ".join(formulas))
+                self.done.emit(True, i18n.t("安装完成：{}", ", ".join(formulas)))
             else:
-                self.done.emit(False, f"brew 退出码 {code}：" + " / ".join(tail[-3:]))
+                self.done.emit(False, i18n.t("brew 退出码 {}：{}", code,
+                                             " / ".join(tail[-3:])))
 
         self._thread = threading.Thread(target=worker, daemon=True, name="brew-install")
         self._thread.start()

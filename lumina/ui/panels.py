@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QForm
                                QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from . import theme
-from .. import asr, cloud, config as cfg, doctor, langtags, storage, translate
+from .. import asr, cloud, config as cfg, doctor, i18n, langtags, naming, storage, translate
 
 FONTS = ["PingFang SC", "Hiragino Sans GB", "Heiti SC", "Songti SC",
          "Helvetica Neue", "Arial Unicode MS", "Noto Sans CJK SC"]
@@ -44,6 +44,64 @@ def _section(text: str) -> QLabel:
     label = QLabel(text.upper())
     label.setObjectName("SectionLabel")
     return label
+
+
+class _Texts:
+    """把「控件 + 中文原文」记成一本账，切语言时统一重刷。
+
+    面板里的静态文案一律走这里：直接 QLabel("中文") 的话，切语言时没人知道该改哪。
+    """
+
+    def __init__(self, owner: QWidget):
+        self._items: list[tuple[QWidget, str, str]] = []     # (控件, 方法名, 中文键)
+        self._owner = owner
+        i18n.bind(owner, self.apply)
+
+    def label(self, widget: QWidget, key: str, method: str = "setText") -> QWidget:
+        self._items.append((widget, method, key))
+        getattr(widget, method)(i18n.t(key))
+        return widget
+
+    def section(self, key: str) -> QLabel:
+        label = _section(i18n.t(key))
+        self._items.append((label, "section", key))
+        return label
+
+    def hint(self, key: str) -> QLabel:
+        label = _hint(i18n.t(key))
+        self._items.append((label, "setText", key))
+        return label
+
+    def new_label(self, key: str, parent: QWidget) -> QLabel:
+        return self.label(QLabel(parent), key)      # type: ignore[return-value]
+
+    def caption(self, key: str, widget: QWidget, box: QVBoxLayout) -> QWidget:
+        label = self.new_label(key, None)
+        label.setObjectName("HintLabel")
+        box.addWidget(label)
+        box.addWidget(widget)
+        return widget
+
+    def combo_item(self, combo: QComboBox, index: int, key: str) -> None:
+        self._items.append((combo, f"__item{index}", key))
+        combo.setItemText(index, i18n.t(key))
+
+    def tip(self, widget: QWidget, key: str) -> None:
+        self._items.append((widget, "setToolTip", key))
+        widget.setToolTip(i18n.t(key))
+
+    def apply(self) -> None:
+        for widget, method, key in self._items:
+            try:
+                if method.startswith("__item"):
+                    widget.setItemText(int(method[6:]), i18n.t(key))
+                elif method == "section":
+                    widget.setText(i18n.t(key).upper())
+                else:
+                    getattr(widget, method)(i18n.t(key))
+            except RuntimeError:        # 控件已销毁
+                continue
+
 
 
 def _combo(title: str, box: QVBoxLayout, parent: QWidget) -> QComboBox:
@@ -273,10 +331,11 @@ class LanguagePreference(QWidget):
         super().__init__(parent)
         self.config = config
         self.key = key
+        self._texts = _Texts(self)
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(6)
-        box.addWidget(_section(title))
+        box.addWidget(self._texts.section(title))
         self.list = QListWidget(self)
         self.list.setMinimumHeight(96)
         box.addWidget(self.list)
@@ -287,12 +346,13 @@ class LanguagePreference(QWidget):
         self.combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.combo.setMinimumContentsLength(6)
         for code, name in cfg.LANGUAGE_CHOICES:
+            # 语言名用各语言的自称（日本語 / Français），这是语言选择器的通行做法，不随界面翻译
             self.combo.addItem(name, code)
         add = QToolButton(self)
-        add.setText("添加")
+        self._texts.label(add, "添加")
         add.clicked.connect(self._add)
         remove = QToolButton(self)
-        remove.setText("移除")
+        self._texts.label(remove, "移除")
         remove.clicked.connect(self._remove)
         up = QToolButton(self)
         up.setText("↑")
@@ -303,13 +363,15 @@ class LanguagePreference(QWidget):
         for widget in (self.combo, add, remove, up, down):
             row.addWidget(widget)
         box.addLayout(row)
-        box.addWidget(_hint("越靠上越优先；写进 alang/slang 时自动展开 zh/zho/chi/cmn 等变体。"))
+        box.addWidget(self._texts.hint("越靠上越优先；写进 alang/slang 时自动展开 zh/zho/chi/cmn 等变体。"))
         self.reload()
+        i18n.bind(self, self.reload)      # 列表项里的语言名也要跟着换
 
     def reload(self) -> None:
         self.list.clear()
         for tag in (self.config.get(self.key) or []):
-            item = QListWidgetItem(f"{langtags.language_name(tag)}  ({tag})")
+            name = naming.lang_name(langtags.language_name(tag))
+            item = QListWidgetItem(f"{name}  ({tag})")
             item.setData(Qt.UserRole, tag)
             self.list.addItem(item)
 
@@ -354,6 +416,7 @@ class DoctorCard(QWidget):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = config
+        self._texts = _Texts(self)
         self.items: list = []
         self._checking = False
         box = QVBoxLayout(self)
@@ -361,12 +424,12 @@ class DoctorCard(QWidget):
         box.setSpacing(6)
 
         head = QHBoxLayout()
-        title = QLabel("环境自检")
+        title = self._texts.new_label("环境自检", self)
         title.setObjectName("SectionLabel")
         head.addWidget(title)
         head.addStretch(1)
         recheck = QToolButton(self)
-        recheck.setText("重新检测")
+        self._texts.label(recheck, "重新检测")
         theme.set_role(recheck, "ghost")
         recheck.clicked.connect(self.refresh)
         head.addWidget(recheck)
@@ -379,10 +442,12 @@ class DoctorCard(QWidget):
         box.addLayout(self.list_area)
 
         row = QHBoxLayout()
-        self.install_button = QPushButton("一键安装缺失组件")
+        self.install_button = QPushButton("")
+        self._texts.label(self.install_button, "一键安装缺失组件")
         theme.set_role(self.install_button, "primary")
         self.install_button.clicked.connect(self._install)
-        self.cancel_button = QPushButton("取消")
+        self.cancel_button = QPushButton("")
+        self._texts.label(self.cancel_button, "取消")
         theme.set_role(self.cancel_button, "ghost")
         self.cancel_button.clicked.connect(self._cancel)
         self.cancel_button.hide()
@@ -413,7 +478,7 @@ class DoctorCard(QWidget):
         if getattr(self, "_checking", False):
             return
         self._checking = True
-        self.summary.setText("检测中…")
+        self.summary.setText(i18n.t("检测中…"))
 
         def worker() -> None:
             # 信号跨线程排队回 GUI 线程；worker 里不许碰任何控件
@@ -451,7 +516,7 @@ class DoctorCard(QWidget):
         self.checked.emit()
 
     def _install(self) -> None:
-        self.log.setText("开始安装…（首次可能要几分钟）")
+        self.log.setText(i18n.t("开始安装…（首次可能要几分钟）"))
         self.cancel_button.show()
         self.install_button.hide()
         self.installer.start(self.items)
@@ -1283,27 +1348,43 @@ class SettingsPanel(QWidget):
         self.config = config
         self.engine = engine
         self.pipeline = pipeline
+        self._texts = _Texts(self)
         body = QWidget(self)
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 24)
         box.setSpacing(8)
 
-        box.addWidget(_section("解码"))
+        box.addWidget(self._texts.section("界面"))
+        self.language_combo = QComboBox(body)
+        for value, label in i18n.LANGUAGES:
+            self.language_combo.addItem(i18n.t(label), value)
+            self._texts.combo_item(self.language_combo, self.language_combo.count() - 1, label)
+        index = self.language_combo.findData(str(self.config.get("ui.language", "auto")))
+        self.language_combo.setCurrentIndex(max(0, index))
+        self.language_combo.currentIndexChanged.connect(self._pick_language)
+        box.addWidget(self.language_combo)
+        self.language_note = self._texts.hint("切换后立刻生效；进度与状态文字在下一次刷新时跟着换")
+        box.addWidget(self.language_note)
+
+        box.addWidget(self._texts.section("解码"))
         self.hwdec_combo = QComboBox(body)
         for label in cfg.hwdec_choices():
-            self.hwdec_combo.addItem(label)
+            self.hwdec_combo.addItem(i18n.t(label), label)
         current = cfg.hwdec_label(self.config.get("player.hwdec", "auto-safe"))
-        self.hwdec_combo.setCurrentText(current)
+        hwdec_index = self.hwdec_combo.findData(current)
+        self.hwdec_combo.setCurrentIndex(max(0, hwdec_index))
         self.hwdec_combo.currentIndexChanged.connect(self._pick_hwdec)
         box.addWidget(self.hwdec_combo)
         self.hwdec_actual = _hint("")
         box.addWidget(self.hwdec_actual)
 
         self.vo_combo = QComboBox(body)
-        self.vo_combo.addItem("渲染：gpu（自动，推荐）", ("gpu", ""))
-        self.vo_combo.addItem("渲染：gpu + macvk（Vulkan）", ("gpu", "macvk"))
-        self.vo_combo.addItem("渲染：gpu-next", ("gpu-next", ""))
-        self.vo_combo.addItem("渲染：null（不出画面，排查用）", ("null", ""))
+        for key, data in (("渲染：gpu（自动，推荐）", ("gpu", "")),
+                          ("渲染：gpu + macvk（Vulkan）", ("gpu", "macvk")),
+                          ("渲染：gpu-next", ("gpu-next", "")),
+                          ("渲染：null（不出画面，排查用）", ("null", ""))):
+            self.vo_combo.addItem(i18n.t(key), data)
+            self._texts.combo_item(self.vo_combo, self.vo_combo.count() - 1, key)
         wanted = (str(self.config.get("player.vo", "gpu")),
                   str(self.config.get("player.gpu_context", "cocoa")))
         index = self.vo_combo.findData(wanted)
@@ -1312,14 +1393,16 @@ class SettingsPanel(QWidget):
         box.addWidget(self.vo_combo)
 
         # QCheckBox 没有 wordWrap，标签一长就把整块面板撑宽、越界处被裁掉 → 短标签 + 悬浮说明
-        self.passthrough = QCheckBox("音频直通 AC3/DTS", body)
-        self.passthrough.setToolTip("把 AC3/DTS 原样送给功放解码。改动后要重启播放器才生效")
+        self.passthrough = QCheckBox("", body)
+        self._texts.label(self.passthrough, "音频直通 AC3/DTS")
+        self._texts.tip(self.passthrough, "把 AC3/DTS 原样送给功放解码。改动后要重启播放器才生效")
         self.passthrough.setChecked(bool(self.config.get("player.audio_passthrough", False)))
         self.passthrough.toggled.connect(self._toggle_passthrough)
         box.addWidget(self.passthrough)
-        self.embed = QCheckBox("画面画进本窗口", body)
-        self.embed.setToolTip("关掉退回「独立 mpv 播放窗 + 贴合视频区」那条退路：\n"
-                              "显卡驱动不支持 GL 内嵌、或画面出问题时用。改动后要重启播放器")
+        self.embed = QCheckBox("", body)
+        self._texts.label(self.embed, "画面画进本窗口")
+        self._texts.tip(self.embed, "关掉退回「独立 mpv 播放窗 + 贴合视频区」那条退路：\n"
+                                    "显卡驱动不支持 GL 内嵌、或画面出问题时用。改动后要重启播放器")
         self.embed.setChecked(str(self.config.get("player.backend", "libmpv")) == "libmpv")
         self.embed.toggled.connect(lambda value: (
             self.config.set("player.backend", "libmpv" if value else "ipc"),
@@ -1329,14 +1412,14 @@ class SettingsPanel(QWidget):
         self.vo_combo.setVisible(not self.embed.isChecked())
         self.embed.toggled.connect(lambda value: self.vo_combo.setVisible(not value))
 
-        box.addWidget(_section("字幕外观"))
+        box.addWidget(self._texts.section("字幕外观"))
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft)
         self.font_combo = QComboBox(body)
         self.font_combo.addItems(FONTS)
         self.font_combo.setCurrentText(self.config.get("subtitle.font", FONTS[0]))
         self.font_combo.currentTextChanged.connect(lambda value: self._set_style("font", value))
-        form.addRow("字体", self.font_combo)
+        form.addRow(self._texts.new_label("字体", body), self.font_combo)
         self.size_slider = QSlider(Qt.Horizontal, body)
         self.size_slider.setRange(24, 110)
         self.size_label = QLabel("", body)
@@ -1348,7 +1431,7 @@ class SettingsPanel(QWidget):
         size_row.addWidget(self.size_label)
         holder = QWidget(body)
         holder.setLayout(size_row)
-        form.addRow("字号", holder)
+        form.addRow(self._texts.new_label("字号", body), holder)
         self.margin_slider = QSlider(Qt.Horizontal, body)
         self.margin_slider.setRange(12, 160)
         self.margin_label = QLabel("", body)
@@ -1360,7 +1443,7 @@ class SettingsPanel(QWidget):
         margin_row.addWidget(self.margin_label)
         margin_holder = QWidget(body)
         margin_holder.setLayout(margin_row)
-        form.addRow("双语字幕高度", margin_holder)
+        form.addRow(self._texts.new_label("双语字幕高度", body), margin_holder)
         self.pos_slider = QSlider(Qt.Horizontal, body)
         self.pos_slider.setRange(0, 100)
         self.pos_label = QLabel("", body)
@@ -1372,7 +1455,7 @@ class SettingsPanel(QWidget):
         pos_row.addWidget(self.pos_label)
         pos_holder = QWidget(body)
         pos_holder.setLayout(pos_row)
-        form.addRow("原生字幕位置(mpv)", pos_holder)
+        form.addRow(self._texts.new_label("原生字幕位置(mpv)", body), pos_holder)
         self.delay_slider = QSlider(Qt.Horizontal, body)
         self.delay_slider.setRange(-500, 500)
         self.delay_slider.setValue(int(float(self.config.get("subtitle.delay", 0)) * 100))
@@ -1384,23 +1467,25 @@ class SettingsPanel(QWidget):
         delay_row.addWidget(self.delay_label)
         delay_holder = QWidget(body)
         delay_holder.setLayout(delay_row)
-        form.addRow("时间延迟", delay_holder)
+        form.addRow(self._texts.new_label("时间延迟", body), delay_holder)
         box.addLayout(form)
         self._sync_style_labels()
-        box.addWidget(_hint("生成的字幕遇到长句会自动折成两行、必要时缩小字号；"
-                            "原生字幕太宽可以调小上面的字号。"))
+        box.addWidget(self._texts.hint("生成的字幕遇到长句会自动折成两行、必要时缩小字号；"
+                                      "原生字幕太宽可以调小上面的字号。"))
 
-        box.addWidget(_section("字幕文件"))
-        self.next_to_video = QCheckBox("字幕放在视频旁边", body)
+        box.addWidget(self._texts.section("字幕文件"))
+        self.next_to_video = QCheckBox("", body)
+        self._texts.label(self.next_to_video, "字幕放在视频旁边")
         self.next_to_video.setChecked(bool(self.config.get("subtitle.next_to_video", False)))
         self.next_to_video.toggled.connect(self._pick_next_to_video)
         box.addWidget(self.next_to_video)
-        box.addWidget(_hint("勾选后每部片子的字幕落在视频所在目录下的同名子文件夹；"
-                            "视频目录写不进去时自动回退。"))
+        box.addWidget(self._texts.hint("勾选后每部片子的字幕落在视频所在目录下的同名子文件夹；"
+                                      "视频目录写不进去时自动回退。"))
         self.dir_edit = QLineEdit(str(self.config.get("subtitle.output_dir", "") or ""), body)
         self.dir_edit.setPlaceholderText(f"留空 = {cfg.SUBTITLE_DIR}")
         self.dir_edit.editingFinished.connect(self._apply_dir)
-        self.pick_dir_button = QPushButton("选目录…")
+        self.pick_dir_button = QPushButton(i18n.t("选目录…"))
+        self._texts.label(self.pick_dir_button, "选目录…")
         theme.set_role(self.pick_dir_button, "ghost")
         self.pick_dir_button.clicked.connect(self._choose_dir)
         dir_row = QHBoxLayout()
@@ -1408,14 +1493,16 @@ class SettingsPanel(QWidget):
         dir_row.addWidget(self.pick_dir_button)
         dir_holder = QWidget(body)
         dir_holder.setLayout(dir_row)
-        _captioned("输出目录", dir_holder, box)
+        self._texts.caption("输出目录", dir_holder, box)
         self.dir_note = _hint("")
         box.addWidget(self.dir_note)
         file_row = QHBoxLayout()
-        self.open_dir_button = QPushButton("打开字幕文件夹")
+        self.open_dir_button = QPushButton("")
+        self._texts.label(self.open_dir_button, "打开字幕文件夹")
         theme.set_role(self.open_dir_button, "ghost")
         self.open_dir_button.clicked.connect(self._open_subtitle_dir)
-        self.library_button = QPushButton("清理旧字幕…")
+        self.library_button = QPushButton("")
+        self._texts.label(self.library_button, "清理旧字幕…")
         theme.set_role(self.library_button, "ghost")
         self.library_button.clicked.connect(self._show_library)
         file_row.addWidget(self.open_dir_button)
@@ -1425,28 +1512,27 @@ class SettingsPanel(QWidget):
         self._sync_dir_controls()
         self._sync_dir_note()
 
-        box.addWidget(_section("实时翻译"))
+        box.addWidget(self._texts.section("实时翻译"))
         self.lead_combo = QComboBox(body)
-        for label, seconds in (("预读 10 秒", 10), ("预读 20 秒", 20),
-                               ("预读 30 秒", 30), ("预读 45 秒", 45),
-                               ("预读 60 秒", 60), ("整片（尽可能超前）", 0)):
-            self.lead_combo.addItem(label, seconds)
+        for seconds in (10, 20, 30, 45, 60):
+            self.lead_combo.addItem(i18n.t("预读 {} 秒", seconds), seconds)
+        self.lead_combo.addItem(i18n.t("整片（尽可能超前）"), 0)
         current_lead = int(float(self.config.get("asr.live_lead", 30.0)))
         lead_index = self.lead_combo.findData(current_lead)
         if lead_index < 0:
-            self.lead_combo.addItem(f"预读 {current_lead} 秒", current_lead)
+            self.lead_combo.addItem(i18n.t("预读 {} 秒", current_lead), current_lead)
             lead_index = self.lead_combo.count() - 1
         self.lead_combo.setCurrentIndex(lead_index)
         self.lead_combo.currentIndexChanged.connect(self._pick_live_lead)
         box.addWidget(self.lead_combo)
-        box.addWidget(_hint("预读越多，实时翻译越可能在字幕播到之前准备好；"
-                            "「整片」会从当前位置一路转到片尾，最不容易漏翻但更吃 CPU。"
-                            "跳转后也会从新位置重新预读。"
-                            "115 云端实时翻译走单流代理，默认预读上限 60 秒，"
-                            "可在「云盘」页调整到 120 秒。"))
+        box.addWidget(self._texts.hint("预读越多，实时翻译越可能在字幕播到之前准备好；"
+                                       "「整片」会从当前位置一路转到片尾，最不容易漏翻但更吃 CPU。"
+                                       "跳转后也会从新位置重新预读。"
+                                       "115 云端实时翻译走单流代理，默认预读上限 60 秒，"
+                                       "可在「云盘」页调整到 120 秒。"))
 
-        box.addWidget(_section("默认语言偏好"))
-        box.addWidget(_hint("打开片子时按这个顺序挑音轨/字幕；越靠上越优先。"))
+        box.addWidget(self._texts.section("默认语言偏好"))
+        box.addWidget(self._texts.hint("打开片子时按这个顺序挑音轨/字幕；越靠上越优先。"))
         self.pref_audio = LanguagePreference("默认音轨语言", "languages.default_audio_langs",
                                              config, body)
         self.pref_audio.changed.connect(self._push_prefs)
@@ -1456,14 +1542,15 @@ class SettingsPanel(QWidget):
         self.pref_sub.changed.connect(self._push_prefs)
         box.addWidget(self.pref_sub)
 
-        box.addWidget(_section("诊断与修复"))
+        box.addWidget(self._texts.section("诊断与修复"))
         self.doctor = DoctorCard(config, body)
         box.addWidget(self.doctor)
 
-        box.addWidget(_section("存储与清理"))
-        box.addWidget(_hint("模型（可以删）、字幕、缓存、日志、OpenList 数据的具体路径和占用"
-                            "都列在「存储」标签页，那里每个目录都能直接打开。"))
-        open_data = QPushButton("打开应用数据文件夹")
+        box.addWidget(self._texts.section("存储与清理"))
+        box.addWidget(self._texts.hint("模型（可以删）、字幕、缓存、日志、OpenList 数据的具体路径和占用"
+                                      "都列在「存储」标签页，那里每个目录都能直接打开。"))
+        open_data = QPushButton("")
+        self._texts.label(open_data, "打开应用数据文件夹")
         theme.set_role(open_data, "ghost")
         open_data.clicked.connect(lambda: storage.reveal(cfg.SUPPORT_DIR))
         box.addWidget(open_data)
@@ -1477,7 +1564,10 @@ class SettingsPanel(QWidget):
 
     def _refresh_state(self) -> None:
         actual = self.engine.hwdec_actual()
-        self.hwdec_actual.setText(f"当前实际解码：{actual or '未开始'}")
+        if actual:
+            self.hwdec_actual.setText(i18n.t("当前实际解码：{}", actual))
+        else:
+            self.hwdec_actual.setText(i18n.t("当前实际解码：{}", i18n.t("未开始")))
         self._sync_dir_note()
 
     def _pick_next_to_video(self) -> None:
@@ -1495,7 +1585,7 @@ class SettingsPanel(QWidget):
 
     def _choose_dir(self) -> None:
         current = cfg.subtitle_root(self.config.get("subtitle.output_dir", ""))
-        picked = QFileDialog.getExistingDirectory(self, "字幕放哪儿", str(current))
+        picked = QFileDialog.getExistingDirectory(self, i18n.t("字幕放哪儿"), str(current))
         if not picked:
             return
         self.dir_edit.setText(picked)
@@ -1525,26 +1615,33 @@ class SettingsPanel(QWidget):
         self.pick_dir_button.setEnabled(not follow)
         self.library_button.setEnabled(not follow)
         self.library_button.setToolTip(
-            "跟随视频时没有统一根目录，不提供批量清理" if follow else "")
+            i18n.t("跟随视频时没有统一根目录，不提供批量清理") if follow else "")
 
     def _sync_dir_note(self) -> None:
         stem = self.pipeline.media_stem
         media = self.pipeline.current_media
-        naming = f"{stem}.原文.srt / {stem}.<语言>译文.srt / {stem}.双语.ass"
+        example = naming.naming_example(stem)
         if media:
-            note = f"这一部 → {self.pipeline.sub_folder}\n{naming}"
+            note = i18n.t("这一部 → {}\n{}", self.pipeline.sub_folder, example)
             if self._subtitle_root_now() != self.pipeline.sub_folder.parent:
-                note += "\n（目录/跟随设置从下一部片子生效）"
+                note += "\n" + i18n.t("（目录/跟随设置从下一部片子生效）")
             self.dir_note.setText(note)
         elif bool(self.config.get("subtitle.next_to_video", False)):
-            self.dir_note.setText("打开片子后，字幕存到视频所在目录下的同名子文件夹。")
+            self.dir_note.setText(i18n.t("打开片子后，字幕存到视频所在目录下的同名子文件夹。"))
         else:
-            self.dir_note.setText(f"打开片子后按「视频名 + 说明后缀」各存一份：\n{naming}")
+            self.dir_note.setText(i18n.t("打开片子后按「视频名 + 说明后缀」各存一份：\n{}",
+                                        example))
 
     def _pick_hwdec(self) -> None:
-        mode = cfg.hwdec_mode_for_label(self.hwdec_combo.currentText())
+        mode = cfg.hwdec_mode_for_label(str(self.hwdec_combo.currentData() or "auto-safe"))
         self.engine.set_hwdec(mode)
         self.timer.start()
+
+    def _pick_language(self) -> None:
+        value = str(self.language_combo.currentData() or "auto")
+        self.config.set("ui.language", value)
+        i18n.set_language(i18n.resolve(value))
+        i18n.retranslate()
 
     def _pick_vo(self) -> None:
         vo, context = self.vo_combo.currentData()
@@ -2755,6 +2852,7 @@ class Sidebar(QWidget):
         close.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         close.clicked.connect(self.close_requested)
         grid.addWidget(close, 0, 3)
+        self.close_button = close
         for column in range(3):
             grid.setColumnStretch(column, 1)
         grid.setColumnStretch(3, 0)
@@ -2762,6 +2860,13 @@ class Sidebar(QWidget):
         box.addWidget(tabs)
         box.addWidget(self.stack, 1)
         self.show_page(0)
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        for button, label, hint in zip(self.buttons, self.PAGES, self.PAGE_HINTS):
+            button.setText(i18n.t(label))
+            button.setToolTip(i18n.t(hint))
+        self.close_button.setToolTip(i18n.t("收起侧栏"))
 
     def show_page(self, index: int, sub: int | None = None) -> None:
         self.stack.setCurrentIndex(index)

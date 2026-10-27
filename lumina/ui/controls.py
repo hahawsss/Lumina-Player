@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMenu, QSlider,
                                QToolButton, QVBoxLayout, QWidget)
 
 from . import theme
+from .. import i18n
 
 SPEEDS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
@@ -171,6 +172,9 @@ class ControlBar(QWidget):
         self.setObjectName("ControlBar")
         self.accent = accent
         self._drag_guard = False
+        self._tips: list[tuple[QWidget, str]] = []
+        self._volume_value = 100
+        self._volume_muted = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 8, 16, 12)
@@ -214,7 +218,7 @@ class ControlBar(QWidget):
 
         self.speed_button = QToolButton(panel)
         self.speed_button.setText("1.00×")
-        self.speed_button.setToolTip("播放速度；点击循环，长按选择具体倍速")
+        self._tip(self.speed_button, "播放速度；点击循环，长按选择具体倍速")
         self.speed_button.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self.speed_button)
         for value in SPEEDS:
@@ -232,7 +236,7 @@ class ControlBar(QWidget):
         self.volume_slider.setRange(0, 160)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(96)
-        self.volume_slider.setToolTip("音量 (↑↓)")
+        self._tip(self.volume_slider, "音量 (↑↓)")
         self.volume_slider.valueChanged.connect(self._on_volume)
         row.addWidget(self.volume_slider)
         self.volume_label = QLabel("100", panel)
@@ -261,12 +265,22 @@ class ControlBar(QWidget):
         box.addLayout(row)
 
         self.seek.seek_requested.connect(self.seek_absolute)
+        i18n.bind(self, self._apply_texts)
+
+    def _tip(self, widget: QWidget, key: str) -> None:
+        self._tips.append((widget, key))
+        widget.setToolTip(i18n.t(key))
+
+    def _apply_texts(self) -> None:
+        for widget, key in self._tips:
+            widget.setToolTip(i18n.t(key))
+        self._refresh_volume_text()
 
     def _button(self, icon_name: str, tip: str, parent) -> QToolButton:
         button = QToolButton(parent)
         button.setIcon(theme.icon(icon_name, "#eaeef5", 22))
         button.setIconSize(QSize(22, 22))
-        button.setToolTip(tip)
+        self._tip(button, tip)
         button.setCursor(Qt.PointingHandCursor)
         button.setAutoRaise(True)
         return button
@@ -282,9 +296,15 @@ class ControlBar(QWidget):
         self.volume_slider.blockSignals(True)
         self.volume_slider.setValue(int(value))
         self.volume_slider.blockSignals(False)
-        self.volume_label.setText("静音" if muted else str(int(value)))
+        self._volume_value = int(value)
+        self._volume_muted = bool(muted)
+        self._refresh_volume_text()
         name = "mute" if muted or value == 0 else ("volume1" if value < 70 else "volume2")
         self.mute_button.setIcon(theme.icon(name, "#eaeef5", 22))
+
+    def _refresh_volume_text(self) -> None:
+        self.volume_label.setText(i18n.t("静音") if self._volume_muted
+                                  else str(self._volume_value))
 
     def set_speed(self, value: float) -> None:
         self.speed_button.setText(f"{value:.2f}×")

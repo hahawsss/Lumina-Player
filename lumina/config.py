@@ -310,6 +310,7 @@ DEFAULTS: dict = {
         "theme": "dark",
         "accent": "#4fa8ff",
         "show_chapter_bar": True,
+        "language": "auto",
     },
     "recent": [],
 }

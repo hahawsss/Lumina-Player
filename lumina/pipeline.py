@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from . import asr, config as cfg, langtags, subtitles, translate
+from . import asr, config as cfg, i18n, langtags, naming, subtitles, translate
 from .media import MediaSource
 from .subtitles import AssStyle, Cue
 
@@ -190,8 +190,14 @@ class SubtitlePipeline(QObject):
         self._set_normal_output()
 
     def _set_normal_output(self) -> None:
-        self.output_path = self.sub_folder / f"{self.media_stem}.双语.ass"
-        self.original_path = self.sub_folder / f"{self.media_stem}.原文.srt"
+        # 新产物按当前界面语言命名；已经存在另一种语言命名的旧产物就继续用它 ——
+        # 不重命名、不迁移，重开片子也还能挂回来
+        self.output_path = (naming.first_existing(
+            self.sub_folder, naming.bilingual_candidates(self.media_stem))
+            or self.sub_folder / naming.bilingual_name(self.media_stem))
+        self.original_path = (naming.first_existing(
+            self.sub_folder, naming.original_candidates(self.media_stem))
+            or self.sub_folder / naming.original_name(self.media_stem))
 
     # ------------------------------------------------------------ 成片完整性
 
@@ -357,16 +363,16 @@ class SubtitlePipeline(QObject):
         self.cues = cues
         self.translated = [""] * len(cues)
         self.target = self.config.get("languages.translation_target", self.target)
-        target_name = cfg.lang_display(self.target) if self.target else "译文"
+        target_name = cfg.lang_display(self.target) if self.target else i18n.t("译文")
         marker = self._read_marker()
         source_lang = str(marker.get("lang") or "") or langtags.base_of(self._audio_lang())
-        source_name = cfg.safe_name(cfg.lang_display(source_lang), 12) if source_lang else ""
+        source_name = (cfg.safe_name(naming.lang_name(cfg.lang_display(source_lang)), 12)
+                       if source_lang else "")
         patterns: list[str] = []
         if source_name and not (self.target and langtags.same_lang(source_lang, self.target)):
-            patterns.append(f"{self.media_stem}.{source_name}→{target_name}译文.srt")
-        patterns += [f"{self.media_stem}.{target_name}译文.srt",
-                     f"{self.media_stem}.*{target_name}译文.srt",
-                     f"{self.media_stem}.*译文.srt"]
+            # 只约束「源→」前缀：目标语言后缀是中/英两种写法都认
+            patterns.append(f"{self.media_stem}.{source_name}→*")
+        patterns += naming.translated_globs(self.media_stem, target_name)
         candidates: list[Path] = []
         for pattern in patterns:
             candidates = sorted(self.sub_folder.glob(pattern),
@@ -448,13 +454,12 @@ class SubtitlePipeline(QObject):
 
     def translated_path(self) -> Path:
         """译文 .srt 的文件名带上目标语言；从别种字幕翻过来的，再带上源语言。"""
-        target = cfg.lang_display(self.target) if self.target else "译文"
+        target = cfg.lang_display(self.target) if self.target else i18n.t("译文")
         src = (self.source.lang if self.source else "") or ""
         arrow = ""
         if src and not (self.target and langtags.same_lang(src, self.target)):
-            arrow = f"{cfg.safe_name(cfg.lang_display(src), 12)}→"
-        return (self.sub_folder /
-                f"{self.media_stem}.{arrow}{target}译文.srt")
+            arrow = f"{cfg.safe_name(naming.lang_name(cfg.lang_display(src)), 12)}→"
+        return (self.sub_folder / naming.translated_name(self.media_stem, target, arrow))
 
     def _write_sidecars(self) -> None:
         """双语 .ass 之外再落两份纯文本：原文 .srt 和译文 .srt，方便拷去别处用。

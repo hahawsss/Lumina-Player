@@ -13,7 +13,7 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
-from . import asr, config as cfg, translate
+from . import asr, config as cfg, i18n, translate
 from .ui.main_window import MainWindow
 from .ui.theme import build_qss
 
@@ -26,6 +26,20 @@ S　切字幕轨        A　切音轨        Z　原文→双语→译文
 T　AI 字幕面板        G　轨道面板        I　设置面板        L　播放列表
 D　网盘（115 浏览 / OpenList 管理）        R　存储与清理面板
 Ctrl+O　打开        Ctrl+S　加字幕文件        ⌘,　设置        Ctrl+H　收侧栏"""
+
+SHORTCUT_HELP_EN = """Space / K  play·pause        ← / →  -10s / +30s
+Shift+← / →  ±60s        Alt+← / →  previous / next
+↑ / ↓  volume        M  mute
+[ / ]  speed ±0.25        Backspace  back to 1×
+, / .  frame step        F  fullscreen        Esc  leave fullscreen / hide sidebar
+S  subtitle track        A  audio track        Z  original→bilingual→translated
+T  AI subtitles        G  tracks        I  settings        L  playlist
+D  cloud (115 files / OpenList service)        R  storage & cleanup
+Ctrl+O  open        Ctrl+S  add subtitle file        ⌘,  settings        Ctrl+H  hide sidebar"""
+
+
+def shortcut_help() -> str:
+    return SHORTCUT_HELP_EN if i18n.current() == "en" else SHORTCUT_HELP
 
 
 class LuminaApp(QApplication):
@@ -62,21 +76,22 @@ def paths_from_argv(argv) -> list[str]:
 def build_menu(app: QApplication, window: MainWindow) -> None:
     menubar = window.menuBar()
     menubar.setNativeMenuBar(True)
+    menubar.clear()                     # 切语言会重进这里：先清空，别叠出第二套菜单
 
-    file_menu = menubar.addMenu("文件")
-    open_action = QAction("打开视频…", app)
+    file_menu = menubar.addMenu(i18n.t("文件"))
+    open_action = QAction(i18n.t("打开视频…"), app)
     open_action.setShortcut(QKeySequence("Ctrl+O"))
     open_action.triggered.connect(window.open_file_dialog)
     file_menu.addAction(open_action)
-    folder_action = QAction("打开文件夹…", app)
+    folder_action = QAction(i18n.t("打开文件夹…"), app)
     folder_action.triggered.connect(window.open_folder_dialog)
     file_menu.addAction(folder_action)
-    sub_action = QAction("添加字幕文件…", app)
+    sub_action = QAction(i18n.t("添加字幕文件…"), app)
     sub_action.setShortcut(QKeySequence("Ctrl+S"))
     sub_action.triggered.connect(window._add_subtitle_file)
     file_menu.addAction(sub_action)
     file_menu.addSeparator()
-    recent = file_menu.addMenu("最近打开")
+    recent = file_menu.addMenu(i18n.t("最近打开"))
     window.recent_menu = recent
     for path in window.config.recent[:12]:
         action = QAction(Path(path).name, app)
@@ -84,17 +99,18 @@ def build_menu(app: QApplication, window: MainWindow) -> None:
         recent.addAction(action)
     recent.aboutToShow.connect(lambda: window.refresh_recent_menu(recent))
 
-    playback = menubar.addMenu("播放")
-    pause_action = QAction("播放/暂停", app)
+    playback = menubar.addMenu(i18n.t("播放"))
+    pause_action = QAction(i18n.t("播放/暂停"), app)
     pause_action.setShortcut(QKeySequence("Space"))
     pause_action.triggered.connect(window.toggle_play)
     playback.addAction(pause_action)
-    for label, delta in (("后退 10 秒", -10), ("前进 30 秒", 30), ("后退 60 秒", -60), ("前进 60 秒", 60)):
-        action = QAction(label, app)
+    for label, delta in (("后退 10 秒", -10), ("前进 30 秒", 30),
+                         ("后退 60 秒", -60), ("前进 60 秒", 60)):
+        action = QAction(i18n.t(label), app)
         action.triggered.connect(lambda _=False, d=delta: window.engine.jump(d))
         playback.addAction(action)
     playback.addSeparator()
-    speed_menu = playback.addMenu("速度")
+    speed_menu = playback.addMenu(i18n.t("速度"))
     group = QActionGroup(app)
     for value in (0.5, 0.75, 1.0, 1.25, 1.5, 2.0):
         action = QAction(f"{value:g}×", app)
@@ -104,34 +120,35 @@ def build_menu(app: QApplication, window: MainWindow) -> None:
         group.addAction(action)
         speed_menu.addAction(action)
 
-    view = menubar.addMenu("显示")
+    view = menubar.addMenu(i18n.t("显示"))
     for label, page in (("音轨与字幕", "tracks"), ("AI 字幕", "ai"),
                         ("设置", "settings"), ("播放列表", "playlist"),
                         ("存储与清理", "storage"), ("网盘（115 / OpenList）", "115"),
                         ("OpenList 管理", "cloud_manage")):
-        action = QAction(label, app)
+        action = QAction(i18n.t(label), app)
         action.triggered.connect(lambda _=False, p=page: window.show_sidebar(p))
         view.addAction(action)
-    fullscreen_action = QAction("全屏", app)
+    fullscreen_action = QAction(i18n.t("全屏"), app)
     fullscreen_action.setShortcut(QKeySequence("F"))
     fullscreen_action.triggered.connect(window.toggle_fullscreen)
     view.addAction(fullscreen_action)
 
-    help_menu = menubar.addMenu("帮助")
-    about_keys = QAction("快捷键", app)
+    help_menu = menubar.addMenu(i18n.t("帮助"))
+    about_keys = QAction(i18n.t("快捷键"), app)
     about_keys.setMenuRole(QAction.NoRole)
-    about_keys.triggered.connect(lambda: QMessageBox.information(window, "快捷键", SHORTCUT_HELP))
+    about_keys.triggered.connect(
+        lambda: QMessageBox.information(window, i18n.t("快捷键"), shortcut_help()))
     help_menu.addAction(about_keys)
-    about = QAction("关于 Lumina", app)
+    about = QAction(i18n.t("关于 Lumina"), app)
     about.setMenuRole(QAction.AboutRole)
     about.triggered.connect(window.show_about)
     help_menu.addAction(about)
-    prefs = QAction("设置…", app)
+    prefs = QAction(i18n.t("设置…"), app)
     prefs.setMenuRole(QAction.PreferencesRole)
     prefs.setShortcut(QKeySequence("Ctrl+,"))
     prefs.triggered.connect(lambda: window.show_sidebar("settings"))
     help_menu.addAction(prefs)
-    diagnose = QAction("环境自检…", app)
+    diagnose = QAction(i18n.t("环境自检…"), app)
     diagnose.setMenuRole(QAction.NoRole)
     diagnose.triggered.connect(window.show_doctor)
     help_menu.addAction(diagnose)
@@ -199,6 +216,7 @@ def main(argv=None) -> int:
     sys.excepthook = hook
     app = LuminaApp(argv)
     config = cfg.Config()
+    i18n.set_language(i18n.resolve(config.get("ui.language", "auto")))
     translate.migrate_model_split(config)
     asr.warm_async(config)      # whisper --help 要半秒多，先在后台热起来
     app.setStyleSheet(build_qss(config.get("ui.accent", "#4fa8ff")))
@@ -214,7 +232,7 @@ def main(argv=None) -> int:
         f"TMPDIR={os.environ.get('TMPDIR') or '无'} · "
         f"NPROC={soft}/{hard} 本进程线程={threading.active_count()}")
     window.resize(1180, 700)
-    build_menu(app, window)
+    i18n.bind(window, lambda: build_menu(app, window))   # 切语言时菜单栏整体重建
     app.file_open.connect(window.open_path)
     # ⌘Q 走 aboutToQuit、点红叉走 closeEvent、kill 走信号钩子，三条路都不许留网关孤儿
     app.aboutToQuit.connect(window.shutdown_cloud)

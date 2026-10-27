@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox,
 from . import theme
 from .controls import VideoOverlay
 from .panels import Sidebar, track_row, PAGE_INDEX, CLOUD_SUBPAGE
-from .. import asr, cloud, config as cfg, langtags, translate
+from .. import asr, cloud, config as cfg, i18n, langtags, translate
 from ..engine import MpvController, MpvError
 from ..media import MediaSource
 from ..pipeline import SubtitlePipeline
@@ -133,6 +133,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(400, self._autostart_cloud)
         if paths:
             self.queue_paths(paths)
+        i18n.bind(self, self._apply_texts)
 
     # ------------------------------------------------------------ 云盘网关
 
@@ -173,13 +174,15 @@ class MainWindow(QMainWindow):
         title = QLabel("Lumina Player", card)
         title.setObjectName("TitleText")
         title.setAlignment(Qt.AlignCenter)
-        hint = QLabel("拖入视频，或打开文件 · 空格播放/暂停 · F 全屏 · T 生成 AI 字幕", card)
+        hint = QLabel("", card)
         hint.setObjectName("SubText")
         hint.setAlignment(Qt.AlignCenter)
         hint.setWordWrap(True)
-        open_button = QPushButton("打开视频…")
+        open_button = QPushButton("", card)
         theme.set_role(open_button, "primary")
         open_button.clicked.connect(self.open_file_dialog)
+        self.welcome_hint = hint
+        self.welcome_open = open_button
         box.addWidget(title)
         box.addWidget(hint)
         box.addWidget(open_button, 0, Qt.AlignCenter)
@@ -190,6 +193,10 @@ class MainWindow(QMainWindow):
         box.addWidget(self.doctor)
         card.setMinimumWidth(460)
         return card
+
+    def _apply_texts(self) -> None:
+        self.welcome_hint.setText(i18n.t("拖入视频，或打开文件 · 空格播放/暂停 · F 全屏 · T 生成 AI 字幕"))
+        self.welcome_open.setText(i18n.t("打开视频…"))
 
     def _sync_doctor(self) -> None:
         """体检结果是异步回来的：卡片要先长高再重新居中，否则会把按钮压扁。"""
