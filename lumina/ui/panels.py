@@ -12,7 +12,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QFontMetrics, QPixmap
+from PySide6.QtGui import QAction, QFontMetrics, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout,
                                QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox, QProgressBar,
@@ -104,10 +104,11 @@ class _Texts:
 
 
 
-def _combo(title: str, box: QVBoxLayout, parent: QWidget) -> QComboBox:
+def _combo(title: str, box: QVBoxLayout, parent: QWidget,
+           texts: "_Texts | None" = None) -> QComboBox:
     """「标题 + 一个下拉」的标准一行。必须限制 sizeHint：侧栏只有 ~320 可用，
     长轨道名/模型名会把整块内容顶出去，左右两边的控件一起被裁。"""
-    box.addWidget(_section(title))
+    box.addWidget(texts.section(title) if texts is not None else _section(title))
     combo = QComboBox(parent)
     combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
     combo.setMinimumContentsLength(18)
@@ -157,7 +158,7 @@ def _tiny_progress(parent: QWidget) -> QProgressBar:
 def track_row(track: dict) -> str:
     parts = []
     lang = track.get("lang")
-    name = langtags.language_name(lang) if lang else ""
+    name = naming.lang_name(langtags.language_name(lang)) if lang else ""
     if name:
         parts.append(name)
     title = str(track.get("title") or "").strip()
@@ -167,13 +168,13 @@ def track_row(track: dict) -> str:
         parts.append(str(track["codec"]).upper())
     extra = []
     if track.get("external"):
-        extra.append("外挂")
+        extra.append(i18n.t("外挂"))
     if track.get("default"):
-        extra.append("容器默认")
+        extra.append(i18n.t("容器默认"))
     if extra:
         parts.append("/".join(extra))
     if not parts:
-        parts.append(f"轨道 {track.get('id')}")
+        parts.append(i18n.t("轨道 {}", track.get("id")))
     return " · ".join(parts)
 
 
@@ -224,7 +225,7 @@ def _mini_button(text: str, handler, role: str = "ghost") -> QPushButton:
     return button
 
 
-def _confirm_box(parent, title: str, body: str, ok_text: str = "确定") -> QMessageBox:
+def _confirm_box(parent, title: str, body: str, ok_text: str | None = None) -> QMessageBox:
     """确认框单独造出来是为了能被测试量一眼（按钮文字、默认键、看不看得见）。
 
     主操作（确定删除）用主色填充，回车键却挂在「取消」上：视觉引导和误触保护分开。
@@ -233,20 +234,20 @@ def _confirm_box(parent, title: str, body: str, ok_text: str = "确定") -> QMes
                       QMessageBox.Yes | QMessageBox.No, parent)
     yes = box.button(QMessageBox.Yes)
     no = box.button(QMessageBox.No)
-    yes.setText(ok_text)
-    no.setText("取消")
+    yes.setText(ok_text or i18n.t("确定"))
+    no.setText(i18n.t("取消"))
     theme.set_role(yes, "primary")
     box.setDefaultButton(no)
     return box
 
 
-def _confirm(parent, title: str, body: str, ok_text: str = "确定") -> bool:
+def _confirm(parent, title: str, body: str, ok_text: str | None = None) -> bool:
     return _confirm_box(parent, title, body, ok_text).exec() == QMessageBox.Yes
 
 
 def _warn(parent, title: str, body: str) -> None:
     box = QMessageBox(QMessageBox.Warning, title, body, QMessageBox.Ok, parent)
-    box.button(QMessageBox.Ok).setText("知道了")
+    box.button(QMessageBox.Ok).setText(i18n.t("知道了"))
     box.exec()
 
 
@@ -264,7 +265,7 @@ class SubtitleLibrary(QDialog):
     def __init__(self, root: Path, parent: QWidget | None = None):
         super().__init__(parent)
         self.root = Path(root)
-        self.setWindowTitle("清理生成的字幕")
+        self.setWindowTitle(i18n.t("清理生成的字幕"))
         self.resize(430, 380)
         box = QVBoxLayout(self)
         box.addWidget(_hint(str(self.root)))
@@ -273,10 +274,10 @@ class SubtitleLibrary(QDialog):
         box.addWidget(self.list)
         self.reload()
         row = QHBoxLayout()
-        remove = QPushButton("删除选中")
+        remove = QPushButton(i18n.t("删除选中"))
         theme.set_role(remove, "ghost")
         remove.clicked.connect(self._remove)
-        close = QPushButton("关闭")
+        close = QPushButton(i18n.t("关闭"))
         theme.set_role(close, "ghost")
         close.clicked.connect(self.accept)
         row.addStretch(1)
@@ -298,8 +299,8 @@ class SubtitleLibrary(QDialog):
             size = sum(f.stat().st_size for f in files)
             when = datetime.datetime.fromtimestamp(
                 max(f.stat().st_mtime for f in files)).strftime("%m-%d %H:%M")
-            item = QListWidgetItem(f"{folder.name}　　{len(files)} 个文件 · "
-                                   f"{storage.human_size(size)} · {when}")
+            item = QListWidgetItem(i18n.t("{}　　{} 个文件 · {} · {}", folder.name,
+                                          len(files), storage.human_size(size), when))
             item.setData(Qt.UserRole, str(folder))
             self.list.addItem(item)
 
@@ -307,11 +308,11 @@ class SubtitleLibrary(QDialog):
         targets = [item.data(Qt.UserRole) for item in self.list.selectedItems()]
         if not targets:
             return
-        if not _confirm(self, "确认删除",
-                        f"删掉这 {len(targets)} 个文件夹里的字幕？视频本身不动，"
-                        "删了可以重新转写。\n\n"
-                        + "\n".join(Path(t).name for t in targets[:6]),
-                        "确定删除"):
+        if not _confirm(self, i18n.t("确认删除"),
+                        i18n.t("删掉这 {} 个文件夹里的字幕？视频本身不动，删了可以重新转写。\n\n{}",
+                               len(targets),
+                               "\n".join(Path(t).name for t in targets[:6])),
+                        i18n.t("确定删除")):
             return
         import shutil
         for path in targets:
@@ -544,6 +545,8 @@ class TracksPanel(QWidget):
         self.config = config
         self.engine = engine
         self.pipeline = pipeline
+        self._texts = _Texts(self)
+        self._menu_items: list[tuple[QAction, str]] = []
         body = QWidget(self)
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 20)
@@ -551,7 +554,7 @@ class TracksPanel(QWidget):
 
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
-        title = _section("轨道")
+        title = self._texts.section("轨道")
         title.setContentsMargins(0, 0, 0, 0)
         head.addWidget(title, 1)
         more = QToolButton(body)
@@ -559,35 +562,45 @@ class TracksPanel(QWidget):
         more.setPopupMode(QToolButton.InstantPopup)
         theme.set_role(more, "ghost")
         menu = QMenu(more)
-        menu.addAction("加载字幕文件…", lambda: self.add_subtitle_file.emit())
-        menu.addAction("移除外挂字幕", self._remove_external)
+        for key, slot in (("加载字幕文件…", self.add_subtitle_file.emit),
+                          ("移除外挂字幕", self._remove_external)):
+            action = menu.addAction(i18n.t(key), slot)
+            self._menu_items.append((action, key))
         menu.addSeparator()
-        menu.addAction("重新读取轨道", self.reload)
+        action = menu.addAction(i18n.t("重新读取轨道"), self.reload)
+        self._menu_items.append((action, "重新读取轨道"))
         more.setMenu(menu)
         head.addWidget(more)
         box.addLayout(head)
 
-        self.video_combo = _combo("视频轨", box, body)
-        self.audio_combo = _combo("音轨", box, body)
-        self.sub_combo = _combo("字幕轨", box, body)
+        self.video_combo = _combo("视频轨", box, body, self._texts)
+        self.audio_combo = _combo("音轨", box, body, self._texts)
+        self.sub_combo = _combo("字幕轨", box, body, self._texts)
         # 四个下拉一律听 activated（用户选的）而不是 currentIndexChanged（程序改的）：
         # reload() 每次回填都不该被当成一次「用户改了选择」，而用户重复选同一项时
         # currentIndexChanged 根本不发信号，想重试就没反应。
         self.video_combo.activated.connect(self._pick_video)
         self.audio_combo.activated.connect(self._pick_audio)
         self.sub_combo.activated.connect(self._pick_sub)
-        self.mode_combo = _combo("显示方式", box, body)
-        for value, label in DISPLAY_MODES:
-            self.mode_combo.addItem(label, value)
+        self.mode_combo = _combo("显示方式", box, body, self._texts)
+        for index, (value, label) in enumerate(DISPLAY_MODES):
+            self.mode_combo.addItem(i18n.t(label), value)
+            self._texts.combo_item(self.mode_combo, index, label)
         self.mode_combo.activated.connect(self._set_mode)
-        box.addWidget(_hint("「只看原文」直接用内嵌/外挂轨，保留原样式；"
-                            "双语与译文由播放器生成一条新轨（在 AI 栏里做）。"))
+        box.addWidget(self._texts.hint("「只看原文」直接用内嵌/外挂轨，保留原样式；"
+                                       "双语与译文由播放器生成一条新轨（在 AI 栏里做）。"))
         box.addStretch(1)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
         self.reload()
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        for action, key in self._menu_items:
+            action.setText(i18n.t(key))
+        self.reload()          # 轨名（语言名/外挂）与占位项跟着换
 
     def _fill(self, combo: QComboBox, tracks: list[dict], selected=None) -> None:
         """按 mpv 当前选中的轨复原：默认语言选出来的那条，面板上必须显示同一条。"""
@@ -596,7 +609,7 @@ class TracksPanel(QWidget):
         for track in tracks:
             label = track_row(track)
             if track.get("external"):
-                label = "外挂 · " + label
+                label = i18n.t("外挂 · {}").format(label)
             combo.addItem(label, track.get("id"))
         combo.setEnabled(combo.count() > 0)
         index = combo.findData(selected)
@@ -608,22 +621,22 @@ class TracksPanel(QWidget):
         self._fill(self.video_combo, self.engine.tracks_of("video"), self.engine.get("vid"))
         self._fill(self.audio_combo, self.engine.tracks_of("audio"), self.engine.get("aid"))
         if not self.engine.tracks_of("video"):
-            self.video_combo.addItem("（没有视频轨）")
+            self.video_combo.addItem(i18n.t("（没有视频轨）"))
         if not self.engine.tracks_of("audio"):
-            self.audio_combo.addItem("（没有音轨）")
+            self.audio_combo.addItem(i18n.t("（没有音轨）"))
 
         wanted = self.sub_combo.currentData()
         self.sub_combo.clear()
-        self.sub_combo.addItem("关闭字幕", "no")
+        self.sub_combo.addItem(i18n.t("关闭字幕"), "no")
         for track in self.engine.tracks_of("sub"):
             if self.pipeline.ai_pid is not None and track.get("id") == self.pipeline.ai_pid:
                 continue        # 生成轨单独列一条，别和「外挂」重复
             label = track_row(track)
             if track.get("external"):
-                label = "外挂 · " + label
+                label = i18n.t("外挂 · {}").format(label)
             self.sub_combo.addItem(label, track.get("id"))
         if self.pipeline.ai_pid is not None:
-            self.sub_combo.addItem("AI/译文轨（本播放器生成）", self.pipeline.ai_pid)
+            self.sub_combo.addItem(i18n.t("AI/译文轨（本播放器生成）"), self.pipeline.ai_pid)
         sid = self.engine.get("sid")
         index = self.sub_combo.findData(sid if sid is not None else "no")
         if index < 0:
@@ -701,6 +714,7 @@ class AIPanel(QWidget):
         self.config = config
         self.engine = engine
         self.pipeline = pipeline
+        self._texts = _Texts(self)
         body = QWidget(self)
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 20)
@@ -712,7 +726,7 @@ class AIPanel(QWidget):
         task_layout = QVBoxLayout(self.task_box)
         task_layout.setContentsMargins(0, 0, 0, 0)
         task_layout.setSpacing(8)
-        task_layout.addWidget(_section("任务进度"))
+        task_layout.addWidget(self._texts.section("任务进度"))
         self.progress = QProgressBar(self.task_box)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -722,27 +736,31 @@ class AIPanel(QWidget):
         self.task_box.hide()
 
         # ------------------------------------------------------------ 转写
-        box.addWidget(_section("语音转字幕"))
-        self.status = _hint("检查中…")
+        box.addWidget(self._texts.section("语音转字幕"))
+        self.status = _hint(i18n.t("检查中…"))
         box.addWidget(self.status)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(6)
-        self.full_button = QPushButton("转字幕")
-        self.full_button.setToolTip("只把音频转成字幕，不翻译")
+        self.full_button = QPushButton("")
+        self._texts.label(self.full_button, "转字幕")
+        self._texts.tip(self.full_button, "只把音频转成字幕，不翻译")
         theme.set_role(self.full_button, "ghost")
         self.full_button.clicked.connect(lambda: self.request.emit(False))
-        self.translate_button = QPushButton("字幕翻译")
-        self.translate_button.setToolTip("翻译当前选中的字幕（原生或音频生成的都行）")
+        self.translate_button = QPushButton("")
+        self._texts.label(self.translate_button, "字幕翻译")
+        self._texts.tip(self.translate_button, "翻译当前选中的字幕（原生或音频生成的都行）")
         theme.set_role(self.translate_button, "ghost")
         self.translate_button.clicked.connect(self._request_translate)
-        self.one_click_button = QPushButton("一键翻译")
-        self.one_click_button.setToolTip("转写 + 翻译一次完成")
+        self.one_click_button = QPushButton("")
+        self._texts.label(self.one_click_button, "一键翻译")
+        self._texts.tip(self.one_click_button, "转写 + 翻译一次完成")
         theme.set_role(self.one_click_button, "primary")
         self.one_click_button.clicked.connect(self.one_click_requested.emit)
-        self.live_button = QPushButton("实时翻译")
-        self.live_button.setToolTip("边播边转写并持续翻译；只用于本场播放，不保存字幕文件")
+        self.live_button = QPushButton("")
+        self._texts.label(self.live_button, "实时翻译")
+        self._texts.tip(self.live_button, "边播边转写并持续翻译；只用于本场播放，不保存字幕文件")
         theme.set_role(self.live_button, "ghost")
         self.live_button.setCheckable(True)
         self.live_button.clicked.connect(self._toggle_live)
@@ -753,19 +771,20 @@ class AIPanel(QWidget):
         box.addLayout(grid)
         stop_row = QHBoxLayout()
         stop_row.addStretch(1)
-        self.stop_button = QPushButton("停止")
+        self.stop_button = QPushButton("")
+        self._texts.label(self.stop_button, "停止")
         theme.set_role(self.stop_button, "ghost")
         self.stop_button.clicked.connect(self._stop)
         stop_row.addWidget(self.stop_button)
         box.addLayout(stop_row)
-        box.addWidget(_hint("转字幕只出原文 · 字幕翻译翻当前选中的轨 · "
-                            "一键翻译＝转写+翻译 · 实时翻译＝边播边转边翻（不保存字幕文件）。"))
+        box.addWidget(self._texts.hint("转字幕只出原文 · 字幕翻译翻当前选中的轨 · "
+                                       "一键翻译＝转写+翻译 · 实时翻译＝边播边转边翻（不保存字幕文件）。"))
         box.addWidget(self.task_box)      # 放在按钮下面：任务开始时按钮不跳位
         self.last_task = _hint("")
         self.last_task.hide()
         box.addWidget(self.last_task)
 
-        self.model_combo = _combo("转写模型", box, body)
+        self.model_combo = _combo("转写模型", box, body, self._texts)
         self.model_note = _hint("")
         box.addWidget(self.model_note)
         self._fill_model_combo()
@@ -774,61 +793,64 @@ class AIPanel(QWidget):
         self.asr_dl_note = _hint("")
         box.addWidget(self.asr_dl_bar)
         box.addWidget(self.asr_dl_note)
-        self.download_button = QPushButton("下载转写模型")
+        self.download_button = QPushButton("")
+        self._texts.label(self.download_button, "下载转写模型")
         theme.set_role(self.download_button, "ghost")
         self.download_button.clicked.connect(self._download)
         box.addWidget(self.download_button)
-        box.addWidget(_hint("要删模型腾空间：侧栏「存储」栏里每个模型的体积都列出来了，可以直接删。"))
+        box.addWidget(self._texts.hint("要删模型腾空间：侧栏「存储」栏里每个模型的体积都列出来了，可以直接删。"))
 
-        self.lang_combo = _combo("识别语言", box, body)
-        self.lang_combo.addItem("自动检测（推荐）", "auto")
+        self.lang_combo = _combo("识别语言", box, body, self._texts)
+        self.lang_combo.addItem(i18n.t("自动检测（推荐）"), "auto")
+        self._texts.combo_item(self.lang_combo, 0, "自动检测（推荐）")
         for code, name in cfg.LANGUAGE_CHOICES:
             self.lang_combo.addItem(name, langtags.base_of(code))
-        self.lang_combo.setToolTip("只对当前这部片生效；实时翻译时改完下一段就生效")
+        self._texts.tip(self.lang_combo, "只对当前这部片生效；实时翻译时改完下一段就生效")
         self.lang_combo.currentIndexChanged.connect(self._pick_lang)
         self.lang_note = _hint("")
         box.addWidget(self.lang_note)
-        box.addWidget(_hint("自动模式会先用语音检测校正音轨语言标记；"
-                            "识别不准就在上面指定本片语言。转写用 whisper.cpp 的 Metal 加速。"))
+        box.addWidget(self._texts.hint("自动模式会先用语音检测校正音轨语言标记；"
+                                       "识别不准就在上面指定本片语言。转写用 whisper.cpp 的 Metal 加速。"))
 
         # ------------------------------------------------------------ 翻译
-        box.addWidget(_section("字幕翻译"))
-        self.engine_combo = _combo("翻译引擎", box, body)
-        for value, label in translate.engine_labels().items():
-            self.engine_combo.addItem(label, value)
+        box.addWidget(self._texts.section("字幕翻译"))
+        self.engine_combo = _combo("翻译引擎", box, body, self._texts)
+        for index, (value, label) in enumerate(translate.engine_labels().items()):
+            self.engine_combo.addItem(i18n.t(label), value)
+            self._texts.combo_item(self.engine_combo, index, label)
         self.engine_combo.setCurrentIndex(max(0, self.engine_combo.findData(
             self.config.get("translate.engine", "openai"))))
         self.engine_combo.currentIndexChanged.connect(self._pick_engine)
 
-        self.target_combo = _combo("目标语言", box, body)
+        self.target_combo = _combo("目标语言", box, body, self._texts)
         for code, name in cfg.LANGUAGE_CHOICES:
             self.target_combo.addItem(f"{name} → {code}", code)
         self.target_combo.setCurrentIndex(max(0, self.target_combo.findData(
             self.config.get("languages.translation_target", "zh-CN"))))
         self.target_combo.currentIndexChanged.connect(self._pick_target)
 
-        self.context_combo = _combo("翻译上下文", box, body)
+        self.context_combo = _combo("翻译上下文", box, body, self._texts)
         for label, lines in (("关闭（最快）", 0), ("3 条", 3),
                              ("6 条（推荐）", 6), ("12 条", 12)):
-            self.context_combo.addItem(label, lines)
+            self.context_combo.addItem(i18n.t(label), lines)
         current_context = int(self.config.get("translate.context_lines", 0) or 0)
         context_index = self.context_combo.findData(current_context)
         if context_index < 0:
-            self.context_combo.addItem(f"{current_context} 条", current_context)
+            self.context_combo.addItem(i18n.t("{} 条", current_context), current_context)
             context_index = self.context_combo.count() - 1
         self.context_combo.setCurrentIndex(context_index)
         self.context_combo.currentIndexChanged.connect(self._pick_context)
-        box.addWidget(_hint("保留前几句原文/译文给 LLM 当上下文，人称/术语更连贯但会慢一点；"
-                            "只对在线 OpenAI 和本地 GGUF 有效。"))
+        box.addWidget(self._texts.hint("保留前几句原文/译文给 LLM 当上下文，人称/术语更连贯但会慢一点；"
+                                       "只对在线 OpenAI 和本地 GGUF 有效。"))
 
         # 本地引擎那一组（标题也要一起藏，否则只剩个光杆标题）
         self.llm_box = QWidget(body)
         llm_layout = QVBoxLayout(self.llm_box)
         llm_layout.setContentsMargins(0, 0, 0, 0)
         llm_layout.setSpacing(8)
-        llm_layout.addWidget(_section("本地 GGUF 模型"))
+        llm_layout.addWidget(self._texts.section("本地 GGUF 模型"))
 
-        llm_layout.addWidget(_hint("一键 / 整片翻译（大模型，慢但更稳）"))
+        llm_layout.addWidget(self._texts.hint("一键 / 整片翻译（大模型，慢但更稳）"))
         self.llm_combo = QComboBox(self.llm_box)
         _fill_llm_combo(self.llm_combo, self.config.get("translate.llama_model", ""))
         self.llm_combo.currentIndexChanged.connect(self._pick_llm_model)
@@ -839,14 +861,15 @@ class AIPanel(QWidget):
         self.llm_dl_note = _hint("")
         llm_layout.addWidget(self.llm_dl_bar)
         llm_layout.addWidget(self.llm_dl_note)
-        self.llm_download = QPushButton("下载整片模型")
+        self.llm_download = QPushButton("")
+        self._texts.label(self.llm_download, "下载整片模型")
         theme.set_role(self.llm_download, "ghost")
         self.llm_download.clicked.connect(
             lambda: self._download_llm(self.llm_combo, self.llm_download,
                                        self.llm_dl_bar, self.llm_dl_note))
         llm_layout.addWidget(self.llm_download)
 
-        llm_layout.addWidget(_hint("实时翻译（小模型，快）"))
+        llm_layout.addWidget(self._texts.hint("实时翻译（小模型，快）"))
         self.llm_live_combo = QComboBox(self.llm_box)
         _fill_llm_combo(self.llm_live_combo,
                         self.config.get("translate.live_llama_model", ""))
@@ -858,14 +881,16 @@ class AIPanel(QWidget):
         self.llm_live_dl_note = _hint("")
         llm_layout.addWidget(self.llm_live_dl_bar)
         llm_layout.addWidget(self.llm_live_dl_note)
-        self.llm_live_download = QPushButton("下载实时模型")
+        self.llm_live_download = QPushButton("")
+        self._texts.label(self.llm_live_download, "下载实时模型")
         theme.set_role(self.llm_live_download, "ghost")
         self.llm_live_download.clicked.connect(
             lambda: self._download_llm(self.llm_live_combo, self.llm_live_download,
                                        self.llm_live_dl_bar, self.llm_live_dl_note))
         llm_layout.addWidget(self.llm_live_download)
-        llm_layout.addWidget(_hint("两个模型分开：实时用小模型追速度，一键/整片用大模型慢慢翻；"
-                                   "换模型时选未下载的型号，按钮会变成下载。"))
+        llm_layout.addWidget(self._texts.hint(
+            "两个模型分开：实时用小模型追速度，一键/整片用大模型慢慢翻；"
+            "换模型时选未下载的型号，按钮会变成下载。"))
         box.addWidget(self.llm_box)
 
         # 在线接口的高级项：平铺在这一栏里（不做对话框），但只在选在线引擎时显示
@@ -878,17 +903,17 @@ class AIPanel(QWidget):
         self.base_url.setPlaceholderText("https://api.openai.com/v1")
         self.base_url.editingFinished.connect(
             lambda: self.config.set("translate.openai_base_url", self.base_url.text().strip()))
-        _captioned("接口地址", self.base_url, online_layout)
+        self._texts.caption("接口地址", self.base_url, online_layout)
         self.model_edit = QLineEdit(str(self.config.get("translate.openai_model", "")),
                                     self.online_box)
         self.model_edit.setPlaceholderText("gpt-4o-mini / deepseek-chat / …")
         self.model_edit.editingFinished.connect(
             lambda: self.config.set("translate.openai_model", self.model_edit.text().strip()))
-        _captioned("在线模型", self.model_edit, online_layout)
+        self._texts.caption("在线模型", self.model_edit, online_layout)
         # 用下拉而不是 QSpinBox：QSS 一旦接管 ::up-button，Qt 就不画箭头了
         self.batch_combo = QComboBox(self.online_box)
         for lines in (8, 12, 16, 24, 32, 48, 60):
-            self.batch_combo.addItem(f"{lines} 行 / 批", lines)
+            self.batch_combo.addItem(i18n.t("{} 行 / 批", lines), lines)
         wanted = int(self.config.get("translate.batch_lines", 24))
         index = self.batch_combo.findData(wanted)
         self.batch_combo.setCurrentIndex(index if index >= 0 else 0)
@@ -956,7 +981,8 @@ class AIPanel(QWidget):
     def _stop(self) -> None:
         self.pipeline.stop_all()
         self.live_button.setChecked(False)
-        self.stage.setText("已停止")
+        self._stage_stopped = True
+        self.stage.setText(i18n.t("已停止"))
 
     def _toggle_live(self) -> None:
         """勾上=开始实时；取消勾选=停止。别把「取消实时」当成一次整片转写。"""
@@ -1023,25 +1049,26 @@ class AIPanel(QWidget):
 
     def _update_lang_note(self) -> None:
         if not self.pipeline.current_media:
-            self.lang_note.setText("打开视频后按本片选择；自动模式会用语音检测校正音轨标记")
+            self.lang_note.setText(i18n.t("打开视频后按本片选择；自动模式会用语音检测校正音轨标记"))
             return
         hint = self.pipeline.language_hint()
         tagged = self.pipeline.audio_language()
         if hint != "auto":
-            note = f"本片指定：{cfg.lang_display(hint)}"
+            note = i18n.t("本片指定：{}", naming.lang_name(cfg.lang_display(hint)))
             if tagged and not langtags.same_lang(hint, tagged):
-                note += f"（覆盖音轨的{cfg.lang_display(tagged)}标记）"
+                note += i18n.t("（覆盖音轨的{}标记）",
+                               naming.lang_name(cfg.lang_display(tagged)))
         elif tagged:
-            note = (f"自动：音轨标记为{cfg.lang_display(tagged)}；"
-                    "开始转写时会用语音检测校正")
+            note = i18n.t("自动：音轨标记为{}；开始转写时会用语音检测校正",
+                          naming.lang_name(cfg.lang_display(tagged)))
         else:
-            note = "自动：开始转写时用语音检测判断语言"
+            note = i18n.t("自动：开始转写时用语音检测判断语言")
         self.lang_note.setText(note)
 
     def _download(self) -> None:
         name = self.model_combo.currentText().split("  ")[0]
         if not name.startswith("ggml"):
-            self.asr_dl_note.setText("先在下拉里选一个未下载的模型")
+            self.asr_dl_note.setText(i18n.t("先在下拉里选一个未下载的模型"))
             return
         self._run_download(name, self.download_button, asr.download_model,
                            self.asr_dl_bar, self.asr_dl_note)
@@ -1053,10 +1080,10 @@ class AIPanel(QWidget):
         note = note or self.llm_dl_note
         name = combo.currentData()
         if not name:
-            note.setText("先选一个 GGUF 模型")
+            note.setText(i18n.t("先选一个 GGUF 模型"))
             return
         if getattr(self, "_download_button", None) is not None:
-            note.setText("另一个模型正在下载，等它结束")
+            note.setText(i18n.t("另一个模型正在下载，等它结束"))
             return
         self._run_download(name, button, translate.download_llm_model, bar, note)
 
@@ -1071,8 +1098,8 @@ class AIPanel(QWidget):
                       getattr(self, "llm_live_download", None)):
             if other is not None and other is not button:
                 other.setEnabled(False)
-        button.setText("下载中… 0%")
-        note.setText(f"正在下载 {name}…")
+        button.setText(i18n.t("下载中… {}%", 0))
+        note.setText(i18n.t("正在下载 {}…", name))
         bar.setValue(0)
         bar.show()
 
@@ -1105,7 +1132,7 @@ class AIPanel(QWidget):
             bar.setValue(pct)
         button = getattr(self, "_download_button", None)
         if button is not None:
-            button.setText(f"下载中… {pct}%")
+            button.setText(i18n.t("下载中… {}%", pct))
 
     def _on_download_done(self, error: str) -> None:
         name = getattr(self, "_download_name", "")
@@ -1122,7 +1149,8 @@ class AIPanel(QWidget):
                 bar.setValue(100)
                 QTimer.singleShot(800, bar.hide)   # 让 100% 停一下再收，证明真的走完了
         if note is not None:
-            note.setText(f"下载失败：{error}" if error else f"{name} 下载完成")
+            note.setText(i18n.t("下载失败：{}", error) if error
+                         else i18n.t("{} 下载完成", name))
         if button is not None:
             button.setEnabled(True)
         QTimer.singleShot(100, self.refresh)
@@ -1130,10 +1158,11 @@ class AIPanel(QWidget):
     def _on_task_busy(self, running: bool) -> None:
         """转写/翻译的进度块只在任务运行时出现；结束后留一行「上次任务」结果。"""
         if running:
+            self._stage_stopped = False
             self.progress.setRange(0, 0)     # 具体进度还没来时先转圈
             self.progress.setFormat("")
-            self.stage.setText("准备中…")
-            self.last_task.setText("任务进行中：准备中…")
+            self.stage.setText(i18n.t("准备中…"))
+            self.last_task.setText(i18n.t("任务进行中：{}", i18n.t("准备中…")))
             self.last_task.show()
             self.task_box.show()
         else:
@@ -1145,13 +1174,14 @@ class AIPanel(QWidget):
             self.progress.setValue(0)
             self.progress.setFormat("")
             self.stage.clear()
-            if final_stage.startswith("已停止"):
-                self.last_task.setText("上次任务：已停止")
+            if getattr(self, "_stage_stopped", False):
+                self.last_task.setText(i18n.t("上次任务：已停止"))
             elif final_stage:
                 count = f"（{final_value}/{final_total}）" if final_total > 0 else ""
-                self.last_task.setText(f"上次任务：{final_stage} · 已结束{count}")
+                self.last_task.setText(i18n.t("上次任务：{} · 已结束{}", final_stage, count))
             else:
-                self.last_task.setText("上次任务：已结束")
+                self.last_task.setText(i18n.t("上次任务：已结束"))
+            self._stage_stopped = False
             if self.live_button.isChecked():
                 self.live_button.setChecked(False)   # 实时任务自然结束，按钮别再显示“开”
 
@@ -1159,7 +1189,7 @@ class AIPanel(QWidget):
         if not self.pipeline.is_busy():
             return
         self.task_box.show()
-        self.last_task.setText(f"任务进行中：{stage}")
+        self.last_task.setText(i18n.t("任务进行中：{}", stage))
         self.last_task.show()
         self.stage.setText(stage)
         if total > 0 and done > 0:
@@ -1289,15 +1319,15 @@ class AIPanel(QWidget):
             self.test_result.setText(str(exc))
             return
         self.key_edit.clear()
-        self.test_result.setText(f"密钥已存入钥匙串（{name}）")
+        self.test_result.setText(i18n.t("密钥已存入钥匙串（{}）", name))
 
     def _clear_cache(self) -> None:
         self.pipeline.cache.clear()
-        self.test_result.setText("翻译缓存已清空")
+        self.test_result.setText(i18n.t("翻译缓存已清空"))
 
     def _test(self) -> None:
         self.test_button.setEnabled(False)
-        self.test_result.setText("测试中…（本地模型第一次要等它加载，可能几十秒）")
+        self.test_result.setText(i18n.t("测试中…（本地模型第一次要等它加载，可能几十秒）"))
 
         def worker() -> None:
             try:
@@ -1643,6 +1673,13 @@ class SettingsPanel(QWidget):
         i18n.set_language(i18n.resolve(value))
         i18n.retranslate()
 
+    def sync_language(self) -> None:
+        """侧栏/首屏的开关改过语言后，把这里的选择框跟上去（不触发信号）。"""
+        index = self.language_combo.findData(str(self.config.get("ui.language", "auto")))
+        self.language_combo.blockSignals(True)
+        self.language_combo.setCurrentIndex(max(0, index))
+        self.language_combo.blockSignals(False)
+
     def _pick_vo(self) -> None:
         vo, context = self.vo_combo.currentData()
         self.config.set("player.vo", vo)
@@ -1710,11 +1747,12 @@ class PlaylistPanel(QWidget):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = config
+        self._texts = _Texts(self)
         body = QWidget(self)
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 20)
         box.setSpacing(8)
-        box.addWidget(_section("播放列表"))
+        box.addWidget(self._texts.section("播放列表"))
         self.list = QListWidget(body)
         self.list.itemDoubleClicked.connect(self._play)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1723,27 +1761,27 @@ class PlaylistPanel(QWidget):
         box.addWidget(self.list)
         row = QHBoxLayout()
         add_file = QToolButton(body)
-        add_file.setText("加文件")
+        self._texts.label(add_file, "加文件")
         theme.set_role(add_file, "ghost")
         add_file.clicked.connect(self._add_files)
         add_dir = QToolButton(body)
-        add_dir.setText("加文件夹")
+        self._texts.label(add_dir, "加文件夹")
         theme.set_role(add_dir, "ghost")
         add_dir.clicked.connect(self._add_folder)
         remove = QToolButton(body)
-        remove.setText("移除")
+        self._texts.label(remove, "移除")
         theme.set_role(remove, "ghost")
-        remove.setToolTip("只从播放列表移除，不会删除文件")
+        self._texts.tip(remove, "只从播放列表移除，不会删除文件")
         remove.clicked.connect(self.remove_selected)
         clear = QToolButton(body)
-        clear.setText("清空")
+        self._texts.label(clear, "清空")
         theme.set_role(clear, "ghost")
         clear.clicked.connect(self.list.clear)
         for widget in (add_file, add_dir, remove, clear):
             row.addWidget(widget)
         box.addLayout(row)
 
-        box.addWidget(_section("最近打开"))
+        box.addWidget(self._texts.section("最近打开"))
         self.recent = QListWidget(body)
         self.recent.setMinimumHeight(110)
         self.recent.itemDoubleClicked.connect(self._play)
@@ -1763,10 +1801,10 @@ class PlaylistPanel(QWidget):
         if item is not None:
             self.list.setCurrentItem(item)
         menu = QMenu(self.list)
-        remove = menu.addAction("移除这一项", self.remove_selected)
+        remove = menu.addAction(i18n.t("移除这一项"), self.remove_selected)
         remove.setEnabled(self.list.currentItem() is not None)
         menu.addSeparator()
-        menu.addAction("清空播放列表", self.list.clear)
+        menu.addAction(i18n.t("清空播放列表"), self.list.clear)
         menu.exec(self.list.viewport().mapToGlobal(pos))
 
     def remove_selected(self) -> None:
@@ -1787,7 +1825,7 @@ class PlaylistPanel(QWidget):
         return super().eventFilter(obj, event)
 
     def _add_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "添加媒体", str(Path.home()),
+        paths, _ = QFileDialog.getOpenFileNames(self, i18n.t("添加媒体"), str(Path.home()),
                                                 cfg.media_filter())
         for path in paths:
             self.append(path)
@@ -1795,7 +1833,7 @@ class PlaylistPanel(QWidget):
             self.play_path.emit(paths[0])
 
     def _add_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "添加文件夹", str(Path.home()))
+        folder = QFileDialog.getExistingDirectory(self, i18n.t("添加文件夹"), str(Path.home()))
         if not folder:
             return
         found = sorted(Path(folder).rglob("*"))
@@ -1830,8 +1868,123 @@ class PlaylistPanel(QWidget):
             self.recent.addItem(item)
 
 
+class AddStorageDialog(QDialog):
+    """添加任意 OpenList 存储：字段按网关给出的驱动元数据现渲染。
+
+    115 只是 90 多个驱动里的一个 —— 阿里云盘、夸克、S3、WebDAV、Google Drive……
+    都能挂进来；OAuth 类驱动建议用「网页管理」在官方页里登录，这里贴 token 也行。
+    """
+
+    def __init__(self, client, parent=None):
+        super().__init__(parent)
+        self.client = client
+        self._fields: dict[str, tuple[dict, QWidget]] = {}
+        self.setWindowTitle(i18n.t("添加网盘存储"))
+        self.resize(460, 540)
+        box = QVBoxLayout(self)
+        box.addWidget(_hint(i18n.t("字段来自网关的驱动定义；OAuth 类网盘建议用「网页管理」登录后再回来。")))
+        self.driver_combo = QComboBox(self)
+        self.driver_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._drivers: dict = {}
+        self._load_error = ""
+        try:
+            self._drivers = client.driver_info()
+        except Exception as exc:
+            self._load_error = str(exc)
+        for name in sorted(self._drivers):
+            self.driver_combo.addItem(name)
+        self.driver_combo.currentTextChanged.connect(self._build_fields)
+        _captioned(i18n.t("驱动"), self.driver_combo, box)
+
+        self.mount_edit = QLineEdit("/", self)
+        self.mount_edit.setPlaceholderText(i18n.t("挂载路径，例如 /ali"))
+        _captioned(i18n.t("挂载路径"), self.mount_edit, box)
+        self.remark_edit = QLineEdit("", self)
+        _captioned(i18n.t("备注"), self.remark_edit, box)
+
+        self.form_box = QWidget(self)
+        self.form = QFormLayout(self.form_box)
+        self.form.setLabelAlignment(Qt.AlignLeft)
+        box.addWidget(_scroll(self.form_box), 1)
+        self.error = _hint(self._load_error)
+        box.addWidget(self.error)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton(i18n.t("取消"))
+        theme.set_role(cancel, "ghost")
+        cancel.clicked.connect(self.reject)
+        self.ok_button = QPushButton(i18n.t("添加"))
+        theme.set_role(self.ok_button, "primary")
+        self.ok_button.clicked.connect(self._create)
+        row.addWidget(cancel)
+        row.addWidget(self.ok_button)
+        box.addLayout(row)
+        self.ok_button.setEnabled(not self._load_error)
+        self._build_fields(self.driver_combo.currentText())
+
+    def _clear_form(self) -> None:
+        while self.form.rowCount():
+            self.form.removeRow(0)
+        self._fields.clear()
+
+    def _build_fields(self, driver: str) -> None:
+        self._clear_form()
+        info = self._drivers.get(driver) or {}
+        for spec in info.get("additional") or []:
+            name = str(spec.get("name") or "")
+            if not name:
+                continue
+            kind = str(spec.get("type") or "string")
+            default = str(spec.get("default") or "")
+            label = name + (" *" if spec.get("required") else "")
+            if kind == "bool":
+                widget = QCheckBox(i18n.t("启用"))
+                widget.setChecked(default.lower() == "true")
+            elif kind == "select":
+                widget = QComboBox(self.form_box)
+                options = [o for o in str(spec.get("options") or "").split(",") if o]
+                widget.addItems(options)
+                if default in options:
+                    widget.setCurrentText(default)
+            else:
+                widget = QLineEdit(default, self.form_box)
+                if kind == "text":
+                    widget.setMinimumHeight(52)
+            tip = str(spec.get("help") or "")
+            if tip:
+                widget.setToolTip(tip)
+            self._fields[name] = (spec, widget)
+            self.form.addRow(label, widget)
+
+    def _create(self) -> None:
+        driver = self.driver_combo.currentText()
+        addition = {}
+        for name, (spec, widget) in self._fields.items():
+            kind = str(spec.get("type") or "string")
+            if kind == "bool":
+                addition[name] = bool(widget.isChecked())
+            elif kind == "select":
+                addition[name] = widget.currentText()
+            elif kind == "number":
+                text = widget.text().strip() or str(spec.get("default") or "")
+                try:
+                    addition[name] = int(float(text)) if text else 0
+                except ValueError:
+                    addition[name] = text
+            else:
+                addition[name] = widget.text()
+        try:
+            self.client.create_storage(driver, self.mount_edit.text(),
+                                       addition, self.remark_edit.text().strip())
+        except Exception as exc:
+            _warn(self, i18n.t("添加失败"), str(exc))
+            return
+        self.accept()
+
+
 class CloudPanel(QWidget):
-    """115 网盘目录：OpenList 的 /115 挂载，双击视频交给主窗口的 MediaSource。"""
+    """网盘目录：列出 OpenList 的每个挂载点，任意驱动的存储都能浏览与播放。"""
 
     open_source = Signal(object)
     entries_ready = Signal(str, object)
@@ -1841,7 +1994,8 @@ class CloudPanel(QWidget):
         super().__init__(parent)
         self.config = config
         self.client = client or cloud.OpenList(config)
-        self.path = "/115"
+        self._texts = _Texts(self)
+        self.path = "/"
         self._entries: list[dict] = []
         self._loading = False
         self.entries_ready.connect(self._on_entries)
@@ -1850,34 +2004,61 @@ class CloudPanel(QWidget):
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 20)
         box.setSpacing(8)
-        box.addWidget(_section("115 网盘"))
-        self.status = _hint("打开本页读取 /115 目录")
+        box.addWidget(self._texts.section("网盘"))
+        self.status = _hint("")
         box.addWidget(self.status)
         row = QHBoxLayout()
-        self.up_button = QPushButton("上一级")
+        self.up_button = QPushButton("")
+        self._texts.label(self.up_button, "上一级")
         theme.set_role(self.up_button, "ghost")
         self.up_button.clicked.connect(self._up)
-        self.refresh_button = QPushButton("刷新")
+        self.refresh_button = QPushButton("")
+        self._texts.label(self.refresh_button, "刷新")
         theme.set_role(self.refresh_button, "ghost")
         self.refresh_button.clicked.connect(self.refresh)
         row.addWidget(self.up_button)
         row.addWidget(self.refresh_button)
         box.addLayout(row)
-        self.crumb = _hint("/115")
+        tools = QHBoxLayout()
+        self.add_button = QPushButton("")
+        self._texts.label(self.add_button, "添加存储…")
+        theme.set_role(self.add_button, "ghost")
+        self.add_button.clicked.connect(self._add_storage)
+        self.web_button = QPushButton("")
+        self._texts.label(self.web_button, "网页管理")
+        theme.set_role(self.web_button, "ghost")
+        self.web_button.clicked.connect(self._open_web_ui)
+        tools.addWidget(self.add_button)
+        tools.addWidget(self.web_button)
+        box.addLayout(tools)
+        self.crumb = _hint("/")
         box.addWidget(self.crumb)
         self.list = QListWidget(body)
         self.list.itemDoubleClicked.connect(self._open_item)
         box.addWidget(self.list, 1)
-        box.addWidget(_hint("双击目录进入，双击视频播放；115 登录在 OpenList 管理页完成。"))
+        box.addWidget(self._texts.hint(
+            "双击目录进入、双击视频播放。任意 OpenList 存储都能这样用；"
+            "要加新网盘点「添加存储」，OAuth 类网盘用「网页管理」登录。"))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(body)
+
+    def _add_storage(self) -> None:
+        dialog = AddStorageDialog(self.client, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.refresh()
+
+    def _open_web_ui(self) -> None:
+        if not self.client.healthy():
+            self.status.setText(i18n.t("网关没在运行，先启动 OpenList 服务"))
+            return
+        webbrowser.open(self.client.open_web_ui())
 
     def refresh(self) -> None:
         if self._loading:
             return
         self._loading = True
-        self.status.setText("读取 115 目录…")
+        self.status.setText(i18n.t("读取目录…"))
         path = self.path
         threading.Thread(target=self._load, args=(path,), daemon=True,
                          name="openlist-list").start()
@@ -1903,9 +2084,10 @@ class CloudPanel(QWidget):
             self._add_row(item)
         for item in sorted(files, key=lambda x: str(x.get("name") or "").lower()):
             self._add_row(item)
-        self.status.setText(f"115 · {len(dirs)} 个目录 · {len(files)} 个视频")
-        self.crumb.setText(self.path)
-        self.up_button.setEnabled(self.path.rstrip("/") != "/115")
+        self.status.setText(i18n.t("{} · {} 个目录 · {} 个视频", self.path or "/",
+                                   len(dirs), len(files)))
+        self.crumb.setText(self.path or "/")
+        self.up_button.setEnabled(self.path.rstrip("/") != "")
 
     def _add_row(self, item: dict) -> None:
         name = str(item.get("name") or "")
@@ -1920,14 +2102,14 @@ class CloudPanel(QWidget):
 
     def _on_failed(self, text: str) -> None:
         self._loading = False
-        self.status.setText(f"115 读取失败：{text}（可在「OpenList 服务」里启动网关）")
+        self.status.setText(i18n.t("读取目录失败：{}（可在「OpenList 服务」里启动网关）", text))
         self.status.setToolTip(text)
 
     def _up(self) -> None:
-        if self.path.rstrip("/") == "/115":
+        if self.path.rstrip("/") == "":
             return
         parent = str(Path(self.path).parent)
-        self.path = parent if parent.startswith("/115") else "/115"
+        self.path = "/" if parent in (".", "/") else parent
         self.refresh()
 
     def _open_item(self, row: QListWidgetItem) -> None:
@@ -2748,6 +2930,7 @@ class CloudTab(QWidget):
     def __init__(self, config, pipeline, client=None, parent=None):
         super().__init__(parent)
         self.client = client or cloud.OpenList(config)
+        self._texts = _Texts(self)
         self.browser = CloudPanel(config, self.client, self)
         self.manage = CloudManagePanel(config, pipeline, self.client, self)
         self.manage.storage_changed.connect(self.browser.refresh)
@@ -2759,9 +2942,9 @@ class CloudTab(QWidget):
         self.stack.addWidget(self.browser)
         self.stack.addWidget(self.manage)
         self.buttons: list[QToolButton] = []
-        for index, label in enumerate(("115 文件", "OpenList 服务")):
+        for index, label in enumerate(("网盘文件", "网关服务")):
             button = QToolButton(switch)
-            button.setText(label)
+            self._texts.label(button, label)
             button.setCheckable(True)
             button.setToolButtonStyle(Qt.ToolButtonTextOnly)
             button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -2800,6 +2983,7 @@ class Sidebar(QWidget):
     """
 
     close_requested = Signal()
+    language_toggle_requested = Signal()
 
     PAGES = ("轨道", "AI", "设置", "列表", "存储", "网盘")
     PAGE_HINTS = ("音轨 / 字幕轨 / 显示方式", "转写与翻译任务、模型选择",
@@ -2858,6 +3042,20 @@ class Sidebar(QWidget):
         grid.setColumnStretch(3, 0)
 
         box.addWidget(tabs)
+
+        # 语言开关放这儿而不是埋在设置里：中文界面下按钮写「English」，
+        # 认不出中文的人也能一眼找到；不占标签网格的宽度
+        self.language_button = QToolButton(self)
+        self.language_button.setObjectName("LanguageChip")
+        self.language_button.setCursor(Qt.PointingHandCursor)
+        self.language_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.language_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.language_button.clicked.connect(self.language_toggle_requested)
+        lang_row = QHBoxLayout()
+        lang_row.setContentsMargins(12, 0, 12, 6)
+        lang_row.addWidget(self.language_button)
+        box.addLayout(lang_row)
+
         box.addWidget(self.stack, 1)
         self.show_page(0)
         i18n.bind(self, self._apply_texts)
@@ -2867,6 +3065,10 @@ class Sidebar(QWidget):
             button.setText(i18n.t(label))
             button.setToolTip(i18n.t(hint))
         self.close_button.setToolTip(i18n.t("收起侧栏"))
+        other = "English" if i18n.current() == "zh" else "中文"
+        self.language_button.setText(other)
+        self.language_button.setToolTip(
+            "Switch to English" if other == "English" else "切换成中文")
 
     def show_page(self, index: int, sub: int | None = None) -> None:
         self.stack.setCurrentIndex(index)

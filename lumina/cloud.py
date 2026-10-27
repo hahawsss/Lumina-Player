@@ -346,6 +346,47 @@ class OpenList:
         return list((self._api("GET", "/api/admin/storage/list").get("data") or {})
                     .get("content") or [])
 
+    # ------------------------------------------------------------ 多网盘（任意驱动）
+    def mounts(self) -> list[dict]:
+        """所有可用的挂载点，与驱动无关 —— 115 只是其中之一。"""
+        out = []
+        for item in self.storage_list():
+            status = str(item.get("status") or "")
+            if status not in ("", "work", "init"):
+                continue
+            mount = "/" + str(item.get("mount_path") or "").strip("/")
+            if mount == "/":
+                continue
+            out.append({"mount": mount,
+                        "driver": str(item.get("driver") or ""),
+                        "status": status,
+                        "order": int(item.get("order") or 0)})
+        return sorted(out, key=lambda m: (m["order"], m["mount"]))
+
+    def driver_info(self) -> dict:
+        """OpenList 支持的 90+ 种驱动及其字段定义（建存储用）。"""
+        return self._api("GET", "/api/admin/driver/list").get("data") or {}
+
+    def create_storage(self, driver: str, mount_path: str, addition: dict,
+                       remark: str = "") -> None:
+        mount = "/" + mount_path.strip("/")
+        if not mount.strip("/"):
+            raise CloudError("挂载路径不能为空")
+        payload = {
+            "driver": driver, "mount_path": mount,
+            "addition": json.dumps(addition, ensure_ascii=False),
+            "remark": remark, "order": 0, "status": "work",
+            "cache_expiration": 30, "web_proxy": True, "webdav_policy": "native_proxy",
+            "down_proxy_url": "", "disable_proxy_sign": False, "order_by": "",
+            "extract_folder": "", "header": "", "protocol": "", "proxy_range": False,
+        }
+        self._api("POST", "/api/admin/storage/create", payload)
+        self._token = ""
+
+    def open_web_ui(self) -> str:
+        """OpenList 自带的管理界面：OAuth 类驱动（Google Drive 等）在网页里登录最稳。"""
+        return self.base
+
     def storage_115(self) -> dict:
         for item in self.storage_list():
             if str(item.get("driver") or "") == "115 Cloud" or                     str(item.get("mount_path") or "").rstrip("/") == "/115":
@@ -472,13 +513,18 @@ class OpenList:
         return url
 
     def source(self, path: str, display_name: str | None = None) -> MediaSource:
-        """OpenList 路径 -> 可拖动的 WebDAV URL。"""
+        """OpenList 路径 -> 可拖动的 WebDAV URL（任意挂载点都走这条路）。"""
         path = "/" + path.strip("/")
         encoded = "/".join(quote(part, safe="") for part in path.split("/") if part)
         uri = f"{self.base}/dav/{encoded}"
         name = display_name or Path(path).name
+        mount = "/" + path.strip("/").split("/")[0]
+        # 115 保留原来的 key/origin：缓存与语言台账都按它存的，换了就等于全部重转
+        legacy = mount == "/115"
         return MediaSource(
-            uri=uri, display_name=name, key=f"115:{path}", origin="115",
+            uri=uri, display_name=name,
+            key=f"115:{path}" if legacy else f"cloud{mount}:{path}",
+            origin="115" if legacy else f"cloud{mount}",
             headers=self.headers(),
             # ffmpeg/ffprobe 的默认 Lavf UA 在 115/OSS 上偶尔 403；统一用浏览器 UA
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

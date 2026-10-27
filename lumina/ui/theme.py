@@ -54,6 +54,11 @@ QToolButton[role="chip"] {{ background: rgba(255,255,255,0.07); border: 1px soli
                             border-radius: 9px; padding: 6px 10px; color: #dbe2ec; }}
 QToolButton[role="chip"]:checked {{ background: {accent}; color: #0b0d10; border-color: {accent};
                                     font-weight: 700; }}
+QToolButton#LanguageChip, QPushButton#LanguageChip {{
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 8px; padding: 4px 10px; color: #cfd6e2; font-size: 11.5px; }}
+QToolButton#LanguageChip:hover, QPushButton#LanguageChip:hover {{
+    background: rgba(255,255,255,0.14); color: #ffffff; }}
 
 QListWidget {{ background: #15181d; border: 1px solid #262a32; border-radius: 10px;
                color: #dfe4ec; padding: 4px; outline: none; }}

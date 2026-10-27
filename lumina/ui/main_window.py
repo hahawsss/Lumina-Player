@@ -171,6 +171,16 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(card)
         box.setContentsMargins(30, 26, 30, 26)
         box.setSpacing(10)
+        # 语言开关放在首屏右上角：第一次打开、还没认出界面语言时就能换
+        lang_row = QHBoxLayout()
+        lang_row.addStretch(1)
+        self.welcome_language = QPushButton("English", card)
+        self.welcome_language.setObjectName("LanguageChip")
+        self.welcome_language.setCursor(Qt.PointingHandCursor)
+        self.welcome_language.setFlat(True)
+        self.welcome_language.clicked.connect(self.toggle_language)
+        lang_row.addWidget(self.welcome_language)
+        box.addLayout(lang_row)
         title = QLabel("Lumina Player", card)
         title.setObjectName("TitleText")
         title.setAlignment(Qt.AlignCenter)
@@ -197,6 +207,21 @@ class MainWindow(QMainWindow):
     def _apply_texts(self) -> None:
         self.welcome_hint.setText(i18n.t("拖入视频，或打开文件 · 空格播放/暂停 · F 全屏 · T 生成 AI 字幕"))
         self.welcome_open.setText(i18n.t("打开视频…"))
+        other = "English" if i18n.current() == "zh" else "中文"
+        self.welcome_language.setText(other)
+        self.welcome_language.setToolTip(
+            "Switch to English" if other == "English" else "切换成中文")
+
+    def toggle_language(self) -> None:
+        self.set_language("en" if i18n.current() == "zh" else "zh")
+
+    def set_language(self, pref: str) -> None:
+        self.config.set("ui.language", pref)
+        i18n.set_language(i18n.resolve(pref))
+        i18n.retranslate()
+        self.sidebar.settings.sync_language()
+        self.overlay.show_osd(
+            "Language：English" if i18n.current() == "en" else "界面语言：中文", 1600)
 
     def _sync_doctor(self) -> None:
         """体检结果是异步回来的：卡片要先长高再重新居中，否则会把按钮压扁。"""
@@ -327,14 +352,15 @@ class MainWindow(QMainWindow):
         self.sidebar.close_requested.connect(self.hide_sidebar)
 
     def _wire_panels(self) -> None:
+        self.sidebar.language_toggle_requested.connect(self.toggle_language)
         self.pipeline.progress.connect(self._on_progress)
         self.pipeline.notice.connect(lambda text: self.overlay.show_osd(text, 2600))
         self.pipeline.error.connect(lambda text: self.overlay.show_osd("✗ " + text, 5000))
         self.pipeline.busy.connect(lambda value: self.overlay.set_badge(
-            "AI/翻译进行中" if value else ""))
+            i18n.t("AI/翻译进行中") if value else ""))
         self.sidebar.tracks.add_subtitle_file.connect(self._add_subtitle_file)
         self.sidebar.tracks.subtitle_mode_changed.connect(
-            lambda mode: self.overlay.show_osd(MODE_LABELS.get(mode, mode), 1200))
+            lambda mode: self.overlay.show_osd(i18n.t(MODE_LABELS.get(mode, mode)), 1200))
         self.sidebar.ai.request.connect(self._request_ai)
         self.sidebar.ai.one_click_requested.connect(self._request_one_click)
         self.sidebar.ai.translate_requested.connect(self._translate_track)

@@ -992,6 +992,81 @@ def check_cloud_lifecycle() -> None:
     config.path.unlink(missing_ok=True)
 
 
+def check_cloud_multi_storage() -> None:
+    section("多网盘：任意 OpenList 存储都能浏览与播放")
+    import http.server
+    import json
+    import socketserver
+    from lumina import cloud
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        calls: list = []
+        replies: dict = {}
+
+        def _handle(self, method: str, body: dict) -> None:
+            Handler.calls.append((method, self.path.split("?")[0], body))
+            data = Handler.replies.get(self.path.split("?")[0],
+                                       {"code": 200, "message": "success", "data": {}})
+            raw = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self) -> None:      # noqa: N802
+            self._handle("GET", {})
+
+        def do_POST(self) -> None:     # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            self._handle("POST", json.loads(self.rfile.read(length) or b"{}"))
+
+        def log_message(self, *args) -> None:
+            pass
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    config = cfg.Config(cfg.SUPPORT_DIR / "selfcheck_cloud.toml")
+    client = cloud.OpenList(config)
+    client.port = server.server_address[1]
+    client.token = lambda force=False: "stub-token"
+    try:
+        Handler.replies["/api/admin/storage/list"] = {"code": 200, "data": {"content": [
+            {"mount_path": "/115", "driver": "115 Cloud", "status": "work", "order": 0},
+            {"mount_path": "/ali", "driver": "Aliyundrive Open", "status": "work", "order": 1},
+            {"mount_path": "/off", "driver": "S3", "status": "disabled", "order": 2},
+        ]}}
+        mounts = client.mounts()
+        check("列出所有可用挂载（115 只是其中一个）",
+              [m["mount"] for m in mounts] == ["/115", "/ali"], mounts)
+        check("停用的存储不算挂载", all(m["mount"] != "/off" for m in mounts))
+
+        source = client.source("/ali/movie.mkv", "movie.mkv")
+        check("非 115 挂载生成的是同一条 WebDAV 路径",
+              source.uri.endswith("/dav/ali/movie.mkv") and source.origin == "cloud/ali",
+              (source.uri, source.origin))
+        check("115 的媒体键保持原样（切过去不重转）",
+              client.source("/115/a.mkv").key == "115:/115/a.mkv")
+
+        Handler.calls.clear()
+        client.create_storage("Local", "local/", {"root_folder_path": "/tmp/x"}, "note")
+        method, path, body = Handler.calls[-1]
+        check("添加存储打到 /api/admin/storage/create",
+              method == "POST" and path == "/api/admin/storage/create", (method, path))
+        check("挂载路径归一化、addition 是 JSON 字符串",
+              body.get("mount_path") == "/local"
+              and json.loads(body.get("addition") or "{}")["root_folder_path"] == "/tmp/x",
+              body)
+
+        Handler.replies["/api/admin/driver/list"] = {"code": 200, "data": {
+            "Local": {"additional": [{"name": "root_folder_path", "type": "string"}]}}}
+        check("驱动元数据能取到（建存储表单靠它）",
+              "Local" in client.driver_info())
+    finally:
+        server.shutdown()
+        config.path.unlink(missing_ok=True)
+
+
 def check_live_stream_budget() -> None:
     section("云端实时翻译的读流预算（mpv 预读 × 缓存 × 码率）")
     from lumina.stream_proxy import RangeCacheProxy
@@ -2133,6 +2208,7 @@ def main() -> int:
     check_app_data()
     check_storage()
     check_cloud_lifecycle()
+    check_cloud_multi_storage()
     check_live_stream_budget()
     check_langtags()
     check_subtitles()
