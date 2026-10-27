@@ -25,6 +25,7 @@ backups/
 # 只给自己看的发布计划，不公开
 发布计划.md
 PUBLISH*.md
+release-notes-*.md
 
 # 大文件不进 Git（GitHub 单文件上限 100MB），一律走 Releases 资产分发
 *.zip
