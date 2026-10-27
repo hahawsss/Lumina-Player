@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from . import config as cfg
+from . import config as cfg, i18n
 from .media import MediaSource
 
 BLOCK = 1 << 20                 # 1 MiB
@@ -231,7 +231,7 @@ class RangeCacheProxy:
 
     def total(self) -> int:
         if self._total < 0:
-            raise StreamProxyError("还没拿到文件大小")
+            raise StreamProxyError(i18n.t("还没拿到文件大小"))
         return self._total
 
     def max_lead_seconds(self, duration: float, fraction: float = 0.5) -> float:
@@ -318,7 +318,7 @@ class RangeCacheProxy:
                             continue
                         if reply.status_code not in (200, 206):
                             raise StreamProxyError(
-                                f"上游返回 HTTP {reply.status_code}（探测文件大小）")
+                                i18n.t("上游返回 HTTP {}（探测文件大小）", reply.status_code))
                         content_range = reply.headers.get("content-range") or ""
                         match = re.search(r"/(\d+)$", content_range)
                         if match:
@@ -326,7 +326,7 @@ class RangeCacheProxy:
                         elif reply.headers.get("content-length"):
                             self._total = int(reply.headers["content-length"])
                         if self._total <= 0:
-                            raise StreamProxyError("上游没有给出文件大小")
+                            raise StreamProxyError(i18n.t("上游没有给出文件大小"))
                         self._content_type = (reply.headers.get("content-type")
                                               or "application/octet-stream")
                         break
@@ -334,9 +334,9 @@ class RangeCacheProxy:
                 if attempt == 0:
                     time.sleep(0.5)
                     continue
-                raise StreamProxyError(f"探测上游失败：{exc}") from exc
+                raise StreamProxyError(i18n.t("探测上游失败：{}", exc)) from exc
         if self._total <= 0:
-            raise StreamProxyError("探测上游失败：没有拿到文件大小")
+            raise StreamProxyError(i18n.t("探测上游失败：没有拿到文件大小"))
         self._available_end = 0
         self._trim_start = 0
 
@@ -368,10 +368,10 @@ class RangeCacheProxy:
                             continue
                         if reply.status_code not in (200, 206):
                             raise StreamProxyError(
-                                f"上游返回 HTTP {reply.status_code}（预读{label}）")
+                                i18n.t("上游返回 HTTP {}（预读{}）", reply.status_code, i18n.t(label)))
                         if start > 0 and reply.status_code == 200:
                             raise StreamProxyError(
-                                f"上游忽略了 Range（预读{label}）")
+                                i18n.t("上游忽略了 Range（预读{}）", i18n.t(label)))
                         for chunk in reply.iter_bytes(65536):
                             buf.extend(chunk)
                             if len(buf) >= end - start + 1:
@@ -382,9 +382,9 @@ class RangeCacheProxy:
                 if attempt == 0:
                     time.sleep(0.5)
                     continue
-                raise StreamProxyError(f"预读{label}失败：{exc}") from exc
+                raise StreamProxyError(i18n.t("预读{}失败：{}", i18n.t(label), exc)) from exc
         if not data:
-            raise StreamProxyError(f"预读{label}为空")
+            raise StreamProxyError(i18n.t("预读{}为空", i18n.t(label)))
         with self._cond:
             for block_index in range(start // BLOCK, (end // BLOCK) + 1):
                 block_start = block_index * BLOCK
@@ -480,14 +480,14 @@ class RangeCacheProxy:
 
     def _pump_upstream(self, reply: httpx.Response, start_block: int, gen: int) -> None:
         if reply.status_code not in (200, 206):
-            raise StreamProxyError(f"上游返回 HTTP {reply.status_code}")
+            raise StreamProxyError(i18n.t("上游返回 HTTP {}", reply.status_code))
         content_range = reply.headers.get("content-range") or ""
         if reply.status_code == 206:
             match = re.match(r"bytes (\d+)-", content_range)
             if not match or int(match.group(1)) != start_block * BLOCK:
-                raise StreamProxyError(f"上游 Range 起点不符：{content_range}")
+                raise StreamProxyError(i18n.t("上游 Range 起点不符：{}", content_range))
         elif start_block != 0:
-            raise StreamProxyError("上游忽略了 Range，无法从中间续读")
+            raise StreamProxyError(i18n.t("上游忽略了 Range，无法从中间续读"))
         offset = start_block * BLOCK
         buf = bytearray()
         for chunk in reply.iter_bytes(65536):
@@ -511,7 +511,7 @@ class RangeCacheProxy:
                 self._target_block = None
             self._cond.notify_all()
         if offset < self._total:
-            raise StreamProxyError("上游提前结束")
+            raise StreamProxyError(i18n.t("上游提前结束"))
 
     def _store(self, block_index: int, block: bytes, gen: int) -> None:
         with self._cond:

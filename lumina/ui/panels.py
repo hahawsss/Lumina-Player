@@ -54,6 +54,7 @@ class _Texts:
 
     def __init__(self, owner: QWidget):
         self._items: list[tuple[QWidget, str, str]] = []     # (控件, 方法名, 中文键)
+        self._custom: list[tuple[QComboBox, int, str, tuple]] = []   # 带参数的下拉项
         self._owner = owner
         i18n.bind(owner, self.apply)
 
@@ -86,6 +87,10 @@ class _Texts:
         self._items.append((combo, f"__item{index}", key))
         combo.setItemText(index, i18n.t(key))
 
+    def combo_item_fmt(self, combo: QComboBox, index: int, key: str, *args) -> None:
+        self._custom.append((combo, index, key, args))
+        combo.setItemText(index, i18n.t(key, *args))
+
     def tip(self, widget: QWidget, key: str) -> None:
         self._items.append((widget, "setToolTip", key))
         widget.setToolTip(i18n.t(key))
@@ -100,6 +105,11 @@ class _Texts:
                 else:
                     getattr(widget, method)(i18n.t(key))
             except RuntimeError:        # 控件已销毁
+                continue
+        for combo, index, key, args in self._custom:
+            try:
+                combo.setItemText(index, i18n.t(key, *args))
+            except RuntimeError:
                 continue
 
 
@@ -464,7 +474,7 @@ class DoctorCard(QWidget):
         self.installer.line.connect(self._on_line)
         self.installer.done.connect(self._on_done)
         self.polled.connect(self._apply)
-        self.refresh()
+        i18n.bind(self, self.refresh)    # 体检结论是查出来的字符串：切语言要重查一遍
 
     def _clear_rows(self) -> None:
         while self.list_area.count():
@@ -472,13 +482,23 @@ class DoctorCard(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+                continue
+            layout = item.layout()          # 每行是一个 QHBoxLayout，里面的标签也要删
+            if layout is not None:
+                while layout.count():
+                    sub = layout.takeAt(0)
+                    child = sub.widget()
+                    if child is not None:
+                        child.deleteLater()
 
     def refresh(self) -> None:
         """体检要跑子进程（whisper --help、security 查钥匙串），放后台做，
         否则启动那一下会把事件循环堵住，鼠标转圈。"""
         if getattr(self, "_checking", False):
+            self._refresh_again = True      # 正在查的那一轮用的是旧语言，查完再补一轮
             return
         self._checking = True
+        self._refresh_again = False
         self.summary.setText(i18n.t("检测中…"))
 
         def worker() -> None:
@@ -512,6 +532,9 @@ class DoctorCard(QWidget):
             self.list_area.addLayout(row)
         self.summary.setText(doctor.summarize(items))
         installable = bool(self.installer.formulas(items))
+        if getattr(self, "_refresh_again", False):
+            self._refresh_again = False
+            QTimer.singleShot(0, self.refresh)
         self.install_button.setVisible(installable and not self.installer.running())
         self.install_button.setEnabled(not self.installer.running())
         self.checked.emit()
@@ -833,10 +856,13 @@ class AIPanel(QWidget):
         for label, lines in (("关闭（最快）", 0), ("3 条", 3),
                              ("6 条（推荐）", 6), ("12 条", 12)):
             self.context_combo.addItem(i18n.t(label), lines)
+            self._texts.combo_item(self.context_combo, self.context_combo.count() - 1, label)
         current_context = int(self.config.get("translate.context_lines", 0) or 0)
         context_index = self.context_combo.findData(current_context)
         if context_index < 0:
-            self.context_combo.addItem(i18n.t("{} 条", current_context), current_context)
+            self.context_combo.addItem("", current_context)
+            self._texts.combo_item_fmt(self.context_combo, self.context_combo.count() - 1,
+                                       "{} 条", current_context)
             context_index = self.context_combo.count() - 1
         self.context_combo.setCurrentIndex(context_index)
         self.context_combo.currentIndexChanged.connect(self._pick_context)
@@ -913,19 +939,22 @@ class AIPanel(QWidget):
         # 用下拉而不是 QSpinBox：QSS 一旦接管 ::up-button，Qt 就不画箭头了
         self.batch_combo = QComboBox(self.online_box)
         for lines in (8, 12, 16, 24, 32, 48, 60):
-            self.batch_combo.addItem(i18n.t("{} 行 / 批", lines), lines)
+            self.batch_combo.addItem("", lines)
+            self._texts.combo_item_fmt(self.batch_combo, self.batch_combo.count() - 1,
+                                       "{} 行 / 批", lines)
         wanted = int(self.config.get("translate.batch_lines", 24))
         index = self.batch_combo.findData(wanted)
         self.batch_combo.setCurrentIndex(index if index >= 0 else 0)
         self.batch_combo.currentIndexChanged.connect(
             lambda _: self.config.set("translate.batch_lines", self.batch_combo.currentData()))
-        _captioned("每批行数", self.batch_combo, online_layout)
+        self._texts.caption("每批行数", self.batch_combo, online_layout)
         box.addWidget(self.online_box)
 
         self.key_edit = QLineEdit(body)
         self.key_edit.setEchoMode(QLineEdit.Password)
-        self.key_edit.setPlaceholderText("密钥只进 macOS 钥匙串")
-        save_key = QPushButton("保存密钥")
+        self.key_edit.setPlaceholderText(i18n.t("密钥只进 macOS 钥匙串"))
+        save_key = QPushButton("")
+        self._texts.label(save_key, "保存密钥")
         theme.set_role(save_key, "ghost")
         save_key.clicked.connect(self._save_key)
         key_row = QHBoxLayout()
@@ -937,10 +966,12 @@ class AIPanel(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
-        self.test_button = QPushButton("测试翻译")
+        self.test_button = QPushButton("")
+        self._texts.label(self.test_button, "测试翻译")
         theme.set_role(self.test_button, "ghost")
         self.test_button.clicked.connect(self._test)
-        self.clear_cache = QPushButton("清空缓存")
+        self.clear_cache = QPushButton("")
+        self._texts.label(self.clear_cache, "清空缓存")
         theme.set_role(self.clear_cache, "ghost")
         self.clear_cache.clicked.connect(self._clear_cache)
         for widget in (self.test_button, self.clear_cache):
@@ -962,6 +993,17 @@ class AIPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        self._texts.apply()
+        self.key_edit.setPlaceholderText(i18n.t("密钥只进 macOS 钥匙串"))
+        asr.clear_availability()      # 可用性串是拼好的，清了才会按新语言重查
+        self._update_lang_note()
+        self.refresh()          # 引擎可用性/模型说明是查出来的字符串，重查一遍才会换语言
+        key = getattr(self, "_last_task_key", None)
+        if key is not None and not self.pipeline.is_busy():
+            self.last_task.setText(i18n.t(*key))
 
     # ------------------------------------------------------------ 可见性
 
@@ -1011,7 +1053,7 @@ class AIPanel(QWidget):
         combo.setCurrentIndex(index if index >= 0 else 0)
         combo.blockSignals(False)
         note = asr.MODELS.get(wanted)
-        self.model_note.setText(note[1] if note else "")
+        self.model_note.setText(i18n.t(note[1]) if note else "")
 
     def reload_models(self) -> None:
         """存储栏删过/下过模型后回来同步：下拉重建，选中项一律跟配置走。"""
@@ -1025,7 +1067,7 @@ class AIPanel(QWidget):
         text = self.model_combo.currentText().split("  ")[0]
         self.config.set("asr.model", text)
         note = asr.MODELS.get(text)
-        self.model_note.setText(note[1] if note else "")
+        self.model_note.setText(i18n.t(note[1]) if note else "")
         if getattr(self, "_download_button", None) is None:
             self.asr_dl_note.clear()      # 换了模型，上一次的「下载完成」就不作数了
         self.refresh()
@@ -1175,12 +1217,15 @@ class AIPanel(QWidget):
             self.progress.setFormat("")
             self.stage.clear()
             if getattr(self, "_stage_stopped", False):
-                self.last_task.setText(i18n.t("上次任务：已停止"))
+                self._last_task_key = ("上次任务：已停止", ())
+                self.last_task.setText(i18n.t(*self._last_task_key))
             elif final_stage:
                 count = f"（{final_value}/{final_total}）" if final_total > 0 else ""
-                self.last_task.setText(i18n.t("上次任务：{} · 已结束{}", final_stage, count))
+                self._last_task_key = ("上次任务：{} · 已结束{}", (final_stage, count))
+                self.last_task.setText(i18n.t(*self._last_task_key))
             else:
-                self.last_task.setText(i18n.t("上次任务：已结束"))
+                self._last_task_key = ("上次任务：已结束", ())
+                self.last_task.setText(i18n.t(*self._last_task_key))
             self._stage_stopped = False
             if self.live_button.isChecked():
                 self.live_button.setChecked(False)   # 实时任务自然结束，按钮别再显示“开”
@@ -1207,18 +1252,22 @@ class AIPanel(QWidget):
             return                       # 正在下载，别把「下载中…」覆盖掉
         chosen = self.model_combo.currentText().split("  ")[0]
         have = chosen in asr.list_models()
-        self.download_button.setText("当前转写模型已就绪" if have else "下载选中的转写模型")
+        self.download_button.setText(i18n.t("当前转写模型已就绪") if have
+                                     else i18n.t("下载选中的转写模型"))
         self.download_button.setEnabled(not have)
         model = str(self.config.get("translate.llama_model", "") or "")
         ready = translate.llm_model_ready(model)
         label, note = translate.LLM_MODELS.get(model, (model, "", ""))[:2]
         size = note.split(" · ")[0] if note else ""
         if ready:
-            self.llm_download.setText("当前整片模型已就绪")
-            self.llm_download.setToolTip(f"{label} 已下载；换模型请在下拉里选未下载的型号")
+            self.llm_download.setText(i18n.t("当前整片模型已就绪"))
+            self.llm_download.setToolTip(
+                i18n.t("{} 已下载；换模型请在下拉里选未下载的型号", label))
         else:
-            self.llm_download.setText(f"下载整片模型" + (f"（{size}）" if size else ""))
-            self.llm_download.setToolTip(f"下载 {label}" + (f" · {size}" if size else ""))
+            self.llm_download.setText(i18n.t("下载整片模型")
+                                      + (i18n.t("（{}）", size) if size else ""))
+            self.llm_download.setToolTip(i18n.t("下载 {}", label)
+                                         + (f" · {size}" if size else ""))
         self.llm_download.setEnabled(not ready)
 
         live_model = str(self.config.get("translate.live_llama_model", "") or "")
@@ -1227,21 +1276,27 @@ class AIPanel(QWidget):
             live_model, (live_model, "", ""))[:2]
         live_size = live_note.split(" · ")[0] if live_note else ""
         if live_ready:
-            self.llm_live_download.setText("当前实时模型已就绪")
+            self.llm_live_download.setText(i18n.t("当前实时模型已就绪"))
             self.llm_live_download.setToolTip(
-                f"{live_label} 已下载；换模型请在下拉里选未下载的型号")
+                i18n.t("{} 已下载；换模型请在下拉里选未下载的型号", live_label))
         else:
             self.llm_live_download.setText(
-                "下载实时模型" + (f"（{live_size}）" if live_size else ""))
+                i18n.t("下载实时模型") + (i18n.t("（{}）", live_size) if live_size else ""))
             self.llm_live_download.setToolTip(
-                f"下载 {live_label}" + (f" · {live_size}" if live_size else ""))
+                i18n.t("下载 {}", live_label) + (f" · {live_size}" if live_size else ""))
         self.llm_live_download.setEnabled(not live_ready)
+
+    @staticmethod
+    def _spec_text(note: str) -> str:
+        """「0.46 GB · 最快…」—— 体积照原样，后半句按界面语言翻。"""
+        size, sep, desc = note.partition(" · ")
+        return f"{size}{sep}{i18n.t(desc)}" if sep else note
 
     def refresh(self) -> None:
         self._sync_download_buttons()
         hit = asr.availability_now(self.config)
         if hit is None:                 # 冷缓存：后台去问，别把 GUI 线程堵住
-            self.status.setText("检测 whisper 中…")
+            self.status.setText(i18n.t("检测 whisper 中…"))
             asr.warm_async(self.config)
             QTimer.singleShot(1200, self.refresh)
             return
@@ -1253,34 +1308,35 @@ class AIPanel(QWidget):
         self.one_click_button.setEnabled(ok)
         self.live_button.setEnabled(ok)
         if present:
-            self.model_note.setText("本机已有：" + ", ".join(present))
+            self.model_note.setText(i18n.t("本机已有：{}", ", ".join(present)))
         else:
-            self.model_note.setText("本机还没有转写模型，点下面下载")
+            self.model_note.setText(i18n.t("本机还没有转写模型，点下面下载"))
         binary = translate.find_llama_binary(self.config)
         model = str(self.config.get("translate.llama_model", "") or "")
-        spec = translate.LLM_MODELS.get(model, ("", "", ""))[1]
+        spec = self._spec_text(translate.LLM_MODELS.get(model, ("", "", ""))[1])
         prefix = f"{spec} · " if spec else ""
         live_model = str(self.config.get("translate.live_llama_model", "") or "")
-        live_spec = translate.LLM_MODELS.get(live_model, ("", "", ""))[1]
+        live_spec = self._spec_text(translate.LLM_MODELS.get(live_model, ("", "", ""))[1])
         live_prefix = f"{live_spec} · " if live_spec else ""
         if not binary:
-            self.llm_note.setText("没装 llama.cpp：体检里一键装，或 brew install llama.cpp")
-            self.llm_live_note.setText("没装 llama.cpp：体检里一键装，或 brew install llama.cpp")
+            self.llm_note.setText(i18n.t("没装 llama.cpp：体检里一键装，或 brew install llama.cpp"))
+            self.llm_live_note.setText(i18n.t("没装 llama.cpp：体检里一键装，或 brew install llama.cpp"))
         else:
             self.llm_note.setText(
-                f"整片 {prefix}llama-server 已就绪 · "
-                + ("离线可用" if translate.llm_model_ready(model) else "缺模型，点下面下载"))
+                i18n.t("整片 {}llama-server 已就绪 · {}", prefix,
+                       i18n.t("离线可用") if translate.llm_model_ready(model)
+                       else i18n.t("缺模型，点下面下载")))
             self.llm_live_note.setText(
-                f"实时 {live_prefix}llama-server 已就绪 · "
-                + ("离线可用" if translate.llm_model_ready(live_model)
-                   else "缺模型，点下面下载"))
+                i18n.t("实时 {}llama-server 已就绪 · {}", live_prefix,
+                       i18n.t("离线可用") if translate.llm_model_ready(live_model)
+                       else i18n.t("缺模型，点下面下载")))
 
     # ------------------------------------------------------------ 翻译
 
     def _pick_engine(self) -> None:
         self.config.set("translate.engine", self.engine_combo.currentData())
         self._sync_engine_visibility()
-        self.test_result.setText("已切换引擎，点「测试翻译」验证")
+        self.test_result.setText(i18n.t("已切换引擎，点「测试翻译」验证"))
 
     def _pick_target(self) -> None:
         self.config.set("languages.translation_target", self.target_combo.currentData())
@@ -1400,6 +1456,7 @@ class SettingsPanel(QWidget):
         self.hwdec_combo = QComboBox(body)
         for label in cfg.hwdec_choices():
             self.hwdec_combo.addItem(i18n.t(label), label)
+            self._texts.combo_item(self.hwdec_combo, self.hwdec_combo.count() - 1, label)
         current = cfg.hwdec_label(self.config.get("player.hwdec", "auto-safe"))
         hwdec_index = self.hwdec_combo.findData(current)
         self.hwdec_combo.setCurrentIndex(max(0, hwdec_index))
@@ -1512,7 +1569,7 @@ class SettingsPanel(QWidget):
         box.addWidget(self._texts.hint("勾选后每部片子的字幕落在视频所在目录下的同名子文件夹；"
                                       "视频目录写不进去时自动回退。"))
         self.dir_edit = QLineEdit(str(self.config.get("subtitle.output_dir", "") or ""), body)
-        self.dir_edit.setPlaceholderText(f"留空 = {cfg.SUBTITLE_DIR}")
+        self.dir_edit.setPlaceholderText(i18n.t("留空 = {}", cfg.SUBTITLE_DIR))
         self.dir_edit.editingFinished.connect(self._apply_dir)
         self.pick_dir_button = QPushButton(i18n.t("选目录…"))
         self._texts.label(self.pick_dir_button, "选目录…")
@@ -1545,12 +1602,18 @@ class SettingsPanel(QWidget):
         box.addWidget(self._texts.section("实时翻译"))
         self.lead_combo = QComboBox(body)
         for seconds in (10, 20, 30, 45, 60):
-            self.lead_combo.addItem(i18n.t("预读 {} 秒", seconds), seconds)
-        self.lead_combo.addItem(i18n.t("整片（尽可能超前）"), 0)
+            self.lead_combo.addItem("", seconds)
+            self._texts.combo_item_fmt(self.lead_combo, self.lead_combo.count() - 1,
+                                       "预读 {} 秒", seconds)
+        self.lead_combo.addItem("", 0)
+        self._texts.combo_item(self.lead_combo, self.lead_combo.count() - 1,
+                               "整片（尽可能超前）")
         current_lead = int(float(self.config.get("asr.live_lead", 30.0)))
         lead_index = self.lead_combo.findData(current_lead)
         if lead_index < 0:
-            self.lead_combo.addItem(i18n.t("预读 {} 秒", current_lead), current_lead)
+            self.lead_combo.addItem("", current_lead)
+            self._texts.combo_item_fmt(self.lead_combo, self.lead_combo.count() - 1,
+                                       "预读 {} 秒", current_lead)
             lead_index = self.lead_combo.count() - 1
         self.lead_combo.setCurrentIndex(lead_index)
         self.lead_combo.currentIndexChanged.connect(self._pick_live_lead)
@@ -1591,6 +1654,13 @@ class SettingsPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        self._texts.apply()
+        self.dir_edit.setPlaceholderText(i18n.t("留空 = {}", cfg.SUBTITLE_DIR))
+        self._sync_dir_note()
+        self._refresh_state()
 
     def _refresh_state(self) -> None:
         actual = self.engine.hwdec_actual()
@@ -2042,6 +2112,12 @@ class CloudPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(body)
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        self._texts.apply()
+        if self._entries or self.path == "/":
+            self._on_entries(self.path, self._entries)   # 状态行里的计数用当前语言重写
 
     def _add_storage(self) -> None:
         dialog = AddStorageDialog(self.client, self)
@@ -2153,48 +2229,57 @@ class CloudManagePanel(QWidget):
         self._qr_cancel: threading.Event | None = None
         self._qr_active = False
         self._status: dict = {}
+        self._texts = _Texts(self)
 
         body = QWidget(self)
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 20)
         box.setSpacing(8)
-        box.addWidget(_section("OpenList 网关"))
-        self.status_label = _hint("读取状态…")
+        box.addWidget(self._texts.section("OpenList 网关"))
+        self.status_label = _hint(i18n.t("读取状态…"))
         box.addWidget(self.status_label)
-        self.autostart_check = QCheckBox("随软件启动，关窗自动停止", body)
+        self.autostart_check = QCheckBox("", body)
+        self._texts.label(self.autostart_check, "随软件启动，关窗自动停止")
         self.autostart_check.setChecked(
             str(self.config.get("cloud.start_mode", "auto")) != "manual")
-        self.autostart_check.setToolTip(
-            "勾选：打开 Lumina 就把网关带起来，退出时一起收掉，网盘随时可用。\n"
-            "取消：不随软件启动，只用手动的「启动/停止」；外部自己跑的网关退出时不动。")
+        self._texts.tip(self.autostart_check,
+                        "勾选：打开 Lumina 就把网关带起来，退出时一起收掉，网盘随时可用。\n"
+                        "取消：不随软件启动，只用手动的「启动/停止」；外部自己跑的网关退出时不动。")
         self.autostart_check.toggled.connect(self._pick_autostart)
         box.addWidget(self.autostart_check)
         row = QHBoxLayout()
-        self.start_button = QPushButton("启动")
-        self.stop_button = QPushButton("停止")
-        self.restart_button = QPushButton("重启")
-        self.refresh_button = QPushButton("刷新")
+        self.start_button = QPushButton("")
+        self._texts.label(self.start_button, "启动")
+        self.stop_button = QPushButton("")
+        self._texts.label(self.stop_button, "停止")
+        self.restart_button = QPushButton("")
+        self._texts.label(self.restart_button, "重启")
+        self.refresh_button = QPushButton("")
+        self._texts.label(self.refresh_button, "刷新")
         for button in (self.start_button, self.stop_button, self.restart_button,
                        self.refresh_button):
             theme.set_role(button, "ghost")
             row.addWidget(button)
         box.addLayout(row)
         row2 = QHBoxLayout()
-        self.admin_button = QPushButton("管理页")
-        self.folder_button = QPushButton("数据目录")
-        self.log_button = QPushButton("日志")
+        self.admin_button = QPushButton("")
+        self._texts.label(self.admin_button, "管理页")
+        self.folder_button = QPushButton("")
+        self._texts.label(self.folder_button, "数据目录")
+        self.log_button = QPushButton("")
+        self._texts.label(self.log_button, "日志")
         for button in (self.admin_button, self.folder_button, self.log_button):
             theme.set_role(button, "ghost")
             row2.addWidget(button)
         box.addLayout(row2)
-        box.addWidget(_hint("OpenList 只监听本机，是软件的内置网关。停止/重启会中断正在进行的"
-                            "网盘播放、字幕与实时翻译；有任务时请先停止任务。"))
+        box.addWidget(self._texts.hint("OpenList 只监听本机，是软件的内置网关。停止/重启会中断正在进行的"
+                                       "网盘播放、字幕与实时翻译；有任务时请先停止任务。"))
         self.action_label = _hint("")
         self.action_label.setWordWrap(True)
         box.addWidget(self.action_label)
 
-        box.addWidget(_section("115 账户"))
-        self.login_label = _hint("未读取")
+        box.addWidget(self._texts.section("115 账户"))
+        self.login_label = _hint(i18n.t("未读取"))
         box.addWidget(self.login_label)
         self.qr_label = QLabel(self)
         self.qr_label.setAlignment(Qt.AlignCenter)
@@ -2203,57 +2288,69 @@ class CloudManagePanel(QWidget):
         self.qr_label.hide()
         box.addWidget(self.qr_label, 0, Qt.AlignHCenter)
         qr_row = QHBoxLayout()
-        self.scan_button = QPushButton("扫码登录 115")
-        self.cancel_qr_button = QPushButton("取消")
+        self.scan_button = QPushButton("")
+        self._texts.label(self.scan_button, "扫码登录 115")
+        self.cancel_qr_button = QPushButton("")
+        self._texts.label(self.cancel_qr_button, "取消")
         theme.set_role(self.scan_button, "primary")
         theme.set_role(self.cancel_qr_button, "ghost")
         self.cancel_qr_button.hide()
         qr_row.addWidget(self.scan_button)
         qr_row.addWidget(self.cancel_qr_button)
         box.addLayout(qr_row)
-        self.qr_note = _hint("二维码来自 115 官方接口；扫码后需要重新载入 115 存储。")
+        self.qr_note = self._texts.hint("二维码来自 115 官方接口；扫码后需要重新载入 115 存储。")
         box.addWidget(self.qr_note)
 
-        box.addWidget(_section("115 存储"))
+        box.addWidget(self._texts.section("115 存储"))
         self.mount_edit = QLineEdit("/115", body)
         self.mount_edit.setReadOnly(True)
-        _captioned("挂载路径（建议保持 /115）", self.mount_edit, box)
+        self._texts.caption("挂载路径（建议保持 /115）", self.mount_edit, box)
         self.policy_combo = QComboBox(body)
-        self.policy_combo.addItem("本地代理（拖动最稳）", "native_proxy")
-        self.policy_combo.addItem("Web 代理", "web_proxy")
-        self.policy_combo.addItem("302 跳转", "302_redirect")
-        _captioned("WebDAV 策略", self.policy_combo, box)
-        self.web_proxy_check = QCheckBox("启用 Web 代理（云端实时翻译依赖）", body)
+        for index, (label, value) in enumerate((
+                ("本地代理（拖动最稳）", "native_proxy"),
+                ("Web 代理", "web_proxy"),
+                ("302 跳转", "302_redirect"))):
+            self.policy_combo.addItem(i18n.t(label), value)
+            self._texts.combo_item(self.policy_combo, index, label)
+        self._texts.caption("WebDAV 策略", self.policy_combo, box)
+        self.web_proxy_check = QCheckBox("", body)
+        self._texts.label(self.web_proxy_check, "启用 Web 代理（云端实时翻译依赖）")
         box.addWidget(self.web_proxy_check)
-        self.range_check = QCheckBox("允许 Range 代理", body)
+        self.range_check = QCheckBox("", body)
+        self._texts.label(self.range_check, "允许 Range 代理")
         box.addWidget(self.range_check)
         self.cache_spin = QSpinBox(body)
         self.cache_spin.setRange(0, 600)
-        self.cache_spin.setSuffix(" 秒")
-        _captioned("直链缓存时间", self.cache_spin, box)
-        self.save_storage_button = QPushButton("保存存储设置")
+        self.cache_spin.setSuffix(i18n.t(" 秒"))
+        self._texts.caption("直链缓存时间", self.cache_spin, box)
+        self.save_storage_button = QPushButton("")
+        self._texts.label(self.save_storage_button, "保存存储设置")
         theme.set_role(self.save_storage_button, "primary")
         box.addWidget(self.save_storage_button)
-        box.addWidget(_hint("云端实时翻译的单流代理需要 Web 代理；WebDAV 播放建议用本地代理。"
-                            "改存储会重新载入 115，正在播放时可能短暂中断。"))
+        box.addWidget(self._texts.hint("云端实时翻译的单流代理需要 Web 代理；WebDAV 播放建议用本地代理。"
+                                       "改存储会重新载入 115，正在播放时可能短暂中断。"))
 
-        box.addWidget(_section("云端播放缓存"))
+        box.addWidget(self._texts.section("云端播放缓存"))
         self.cache_combo = QComboBox(body)
         for mb in (64, 128, 256, 512):
-            self.cache_combo.addItem(f"内存缓存 {mb} MB", mb)
+            self.cache_combo.addItem("", mb)
+            self._texts.combo_item_fmt(self.cache_combo, self.cache_combo.count() - 1,
+                                       "内存缓存 {} MB", mb)
         current_mb = int(float(self.config.get("cloud.live_cache_mb", 128)))
         idx = self.cache_combo.findData(current_mb)
         self.cache_combo.setCurrentIndex(idx if idx >= 0 else 1)
-        _captioned("单流代理内存缓存", self.cache_combo, box)
+        self._texts.caption("单流代理内存缓存", self.cache_combo, box)
         self.lead_combo = QComboBox(body)
         for sec in (30, 60, 120):
-            self.lead_combo.addItem(f"云端预读上限 {sec} 秒", sec)
+            self.lead_combo.addItem("", sec)
+            self._texts.combo_item_fmt(self.lead_combo, self.lead_combo.count() - 1,
+                                       "云端预读上限 {} 秒", sec)
         current_lead = int(float(self.config.get("cloud.live_lead_max", 60)))
         idx = self.lead_combo.findData(current_lead)
         self.lead_combo.setCurrentIndex(idx if idx >= 0 else 1)
-        _captioned("实时翻译预读上限", self.lead_combo, box)
-        box.addWidget(_hint("缓存只占内存，不落视频盘。扩大缓存会让跳读和预读更稳，"
-                            "但会占用更多内存；预读上限下一次实时任务生效。"))
+        self._texts.caption("实时翻译预读上限", self.lead_combo, box)
+        box.addWidget(self._texts.hint("缓存只占内存，不落视频盘。扩大缓存会让跳读和预读更稳，"
+                                       "但会占用更多内存；预读上限下一次实时任务生效。"))
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
@@ -2279,6 +2376,18 @@ class CloudManagePanel(QWidget):
         self.cache_combo.currentIndexChanged.connect(self._pick_cache)
         self.lead_combo.currentIndexChanged.connect(self._pick_lead)
         self._update_buttons()
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        self._texts.apply()
+        if self._status:
+            self._on_status(self._status)      # 状态行是拼出来的，重排一遍
+        else:
+            self.status_label.setText(i18n.t("读取状态…"))
+            if not self._storage_loaded:
+                self.login_label.setText(i18n.t("未读取"))
+        if getattr(self, "_storage", None):
+            self._on_storage(self._storage)
 
     # ------------------------------------------------------------ 状态/生命周期
 
@@ -2287,7 +2396,7 @@ class CloudManagePanel(QWidget):
             self._storage_loaded = False
         # 先就地写明「用的是哪一份网关」，再去后台问运行状态：
         # 端口/版本要等 HTTP，来源是本地文件检查，不该让人干等
-        self.status_label.setText(f"读取 OpenList 状态…\n网关程序：{self._binary_note()}")
+        self.status_label.setText(i18n.t("读取 OpenList 状态…\n网关程序：{}", self._binary_note()))
         threading.Thread(target=self._load_status, daemon=True,
                          name="openlist-status").start()
 
@@ -2295,7 +2404,7 @@ class CloudManagePanel(QWidget):
         try:
             self.status_ready.emit(self.client.status())
         except Exception as exc:
-            self.status_failed.emit(f"状态读取失败：{exc}")
+            self.status_failed.emit(i18n.t("状态读取失败：{}", exc))
 
     def _binary_note(self) -> str:
         """网关用的是哪一份、在哪 —— 回答「到底有没有内嵌」。"""
@@ -2306,38 +2415,38 @@ class CloudManagePanel(QWidget):
 
     def _on_status_failed(self, text: str) -> None:
         """状态读不出来也要落在状态行上，别让人对着一句「读取中…」干等。"""
-        self.status_label.setText(f"{text}\n网关程序：{self._binary_note()}")
+        self.status_label.setText(f"{text}\n" + i18n.t("网关程序：{}", self._binary_note()))
 
     def _on_status(self, info: dict) -> None:
         self._status = info
         running = bool(info.get("running"))
         binary = self._binary_note()
         if running:
-            owned = "本进程启动" if info.get("owned") else (
-                f"外部进程 PID {','.join(map(str, info.get('pids') or []))}"
-                if info.get("pids") else "未知进程")
+            owned = i18n.t("本进程启动") if info.get("owned") else (
+                i18n.t("外部进程 PID {}", ",".join(map(str, info.get("pids") or [])))
+                if info.get("pids") else i18n.t("未知进程"))
             version = str(info.get("version") or "").split(" - ")[0]
             self.status_label.setText(
-                f"运行中 · {version} · 端口 {info.get('port')} · {owned}\n"
-                f"网关程序：{binary}")
+                i18n.t("运行中 · {} · 端口 {} · {}", version, info.get("port"), owned)
+                + "\n" + i18n.t("网关程序：{}", binary))
         else:
-            self.status_label.setText(f"已停止\n网关程序：{binary}")
+            self.status_label.setText(i18n.t("已停止") + "\n" + i18n.t("网关程序：{}", binary))
         self.status_label.setToolTip(binary)
         self._update_buttons()
         if running and not self._storage_loaded:
             # 存储配置要先取一次管理员 token（子进程），给个中间态别写着「未读取」干等
-            self.login_label.setText("读取 115 存储配置…")
+            self.login_label.setText(i18n.t("读取 115 存储配置…"))
             threading.Thread(target=self._load_storage, daemon=True,
                              name="openlist-storage").start()
         if not running:
-            self.login_label.setText("OpenList 未运行，先启动")
+            self.login_label.setText(i18n.t("OpenList 未运行，先启动"))
             self.storage_ready.emit({})
 
     def _load_storage(self) -> None:
         try:
             self.storage_ready.emit(self.client.storage_115())
         except Exception as exc:
-            self.qr_failed.emit(f"读取 115 存储失败：{exc}")
+            self.qr_failed.emit(i18n.t("读取 115 存储失败：{}", exc))
 
     def _on_storage(self, storage: dict) -> None:
         self._loading_storage = True
@@ -2345,9 +2454,10 @@ class CloudManagePanel(QWidget):
             if not storage:
                 self._storage_loaded = False
                 self.save_storage_button.setEnabled(False)
-                self.login_label.setText("OpenList 未运行，先启动")
+                self.login_label.setText(i18n.t("OpenList 未运行，先启动"))
                 return
             self._storage_loaded = True
+            self._storage = storage
             self.save_storage_button.setEnabled(True)
             self.mount_edit.setText(str(storage.get("mount_path") or "/115"))
             policy = str(storage.get("webdav_policy") or "native_proxy")
@@ -2361,9 +2471,9 @@ class CloudManagePanel(QWidget):
             except ValueError:
                 addition = {}
             if str(addition.get("cookie") or "").strip():
-                self.login_label.setText("已配置 115 Cookie；扫码可更新登录")
+                self.login_label.setText(i18n.t("已配置 115 Cookie；扫码可更新登录"))
             else:
-                self.login_label.setText("未配置 115 Cookie，请扫码登录")
+                self.login_label.setText(i18n.t("未配置 115 Cookie，请扫码登录"))
         finally:
             self._loading_storage = False
 
@@ -2383,56 +2493,57 @@ class CloudManagePanel(QWidget):
 
     def _ask_busy_or_playing(self, action: str) -> bool:
         if self.pipeline.is_busy():
-            _warn(self, action, "有转写/翻译任务在跑，先在 AI 栏停止任务再操作。")
+            _warn(self, action, i18n.t("有转写/翻译任务在跑，先在 AI 栏停止任务再操作。"))
             return False
         source = self.pipeline.media_source
         if source is not None and source.is_remote:
             return _confirm(self, action,
-                            "当前正在播放网盘视频，操作会中断播放/实时翻译。", "继续操作")
+                            i18n.t("当前正在播放网盘视频，操作会中断播放/实时翻译。"),
+                            i18n.t("继续操作"))
         return True
 
     def _start(self) -> None:
         if self.pipeline.is_busy():
-            _warn(self, "启动 OpenList", "有任务在跑，先停止任务。")
+            _warn(self, i18n.t("启动 OpenList"), i18n.t("有任务在跑，先停止任务。"))
             return
-        self.action_label.setText("启动 OpenList…")
+        self.action_label.setText(i18n.t("启动 OpenList…"))
         def worker():
             try:
                 self.client.ensure_running()
                 self.client.token(force=True)
-                self.action_done.emit("OpenList 已启动")
+                self.action_done.emit(i18n.t("OpenList 已启动"))
             except Exception as exc:
-                self.qr_failed.emit(f"启动失败：{exc}")
+                self.qr_failed.emit(i18n.t("启动失败：{}", exc))
         threading.Thread(target=worker, daemon=True, name="openlist-start").start()
 
     def _stop(self) -> None:
-        if not self._ask_busy_or_playing("停止 OpenList"):
+        if not self._ask_busy_or_playing(i18n.t("停止 OpenList")):
             return
-        if not _confirm(self, "停止 OpenList",
-                        "停止后 115 播放、字幕和实时翻译都会中断。", "确定停止"):
+        if not _confirm(self, i18n.t("停止 OpenList"),
+                        i18n.t("停止后网盘播放、字幕和实时翻译都会中断。"), i18n.t("确定停止")):
             return
-        self.action_label.setText("停止 OpenList…")
+        self.action_label.setText(i18n.t("停止 OpenList…"))
         def worker():
             try:
                 self.client.stop_server()
-                self.action_done.emit("OpenList 已停止")
+                self.action_done.emit(i18n.t("OpenList 已停止"))
             except Exception as exc:
-                self.qr_failed.emit(f"停止失败：{exc}")
+                self.qr_failed.emit(i18n.t("停止失败：{}", exc))
         threading.Thread(target=worker, daemon=True, name="openlist-stop").start()
 
     def _restart(self) -> None:
-        if not self._ask_busy_or_playing("重启 OpenList"):
+        if not self._ask_busy_or_playing(i18n.t("重启 OpenList")):
             return
-        if not _confirm(self, "重启 OpenList",
-                        "会中断当前播放/任务，重启后需要重新载入网盘。", "确定重启"):
+        if not _confirm(self, i18n.t("重启 OpenList"),
+                        i18n.t("会中断当前播放/任务，重启后需要重新载入网盘。"), i18n.t("确定重启")):
             return
-        self.action_label.setText("重启 OpenList…")
+        self.action_label.setText(i18n.t("重启 OpenList…"))
         def worker():
             try:
                 self.client.restart_server()
-                self.action_done.emit("OpenList 已重启")
+                self.action_done.emit(i18n.t("OpenList 已重启"))
             except Exception as exc:
-                self.qr_failed.emit(f"重启失败：{exc}")
+                self.qr_failed.emit(i18n.t("重启失败：{}", exc))
         threading.Thread(target=worker, daemon=True, name="openlist-restart").start()
 
     def _open_admin(self) -> None:
@@ -2442,55 +2553,56 @@ class CloudManagePanel(QWidget):
         try:
             subprocess.run(["open", str(self.client.data_dir)], check=False)
         except OSError as exc:
-            self.action_label.setText(f"打不开目录：{exc}")
+            self.action_label.setText(i18n.t("打不开目录：{}", exc))
 
     def _open_log(self) -> None:
         log = Path(self.client.data_dir) / "server.out"
         if not log.exists():
-            self.action_label.setText("还没有 OpenList 日志")
+            self.action_label.setText(i18n.t("还没有 OpenList 日志"))
             return
         try:
             subprocess.run(["open", str(log)], check=False)
         except OSError as exc:
-            self.action_label.setText(f"打不开日志：{exc}")
+            self.action_label.setText(i18n.t("打不开日志：{}", exc))
 
     # ------------------------------------------------------------ 存储设置
 
     def _save_storage(self) -> None:
-        if not self._ask_busy_or_playing("保存 115 存储"):
+        if not self._ask_busy_or_playing(i18n.t("保存 115 存储")):
             return
         policy = str(self.policy_combo.currentData() or "native_proxy")
         web_proxy = self.web_proxy_check.isChecked()
         if not web_proxy:
-            if not _confirm(self, "关闭 Web 代理",
-                            "云端实时翻译的单流代理依赖 Web 代理；关闭后实时翻译可能不可用。",
-                            "仍要关闭"):
+            if not _confirm(self, i18n.t("关闭 Web 代理"),
+                            i18n.t("云端实时翻译的单流代理依赖 Web 代理；关闭后实时翻译可能不可用。"),
+                            i18n.t("仍要关闭")):
                 return
         if policy != "native_proxy":
-            if not _confirm(self, "改变 WebDAV 策略",
-                            "非「本地代理」策略可能影响 115 拖动和字幕读取。", "仍要保存"):
+            if not _confirm(self, i18n.t("改变 WebDAV 策略"),
+                            i18n.t("非「本地代理」策略可能影响网盘拖动和字幕读取。"),
+                            i18n.t("仍要保存")):
                 return
         mount = self.mount_edit.text().strip() or "/115"
         cache = int(self.cache_spin.value())
         proxy_range = self.range_check.isChecked()
-        self.action_label.setText("保存 115 存储设置…")
+        self.action_label.setText(i18n.t("保存 115 存储设置…"))
         def worker():
             try:
                 self.client.update_115_settings(
                     mount, web_proxy, policy, cache, proxy_range)
                 self.storage_changed.emit()
-                self.action_done.emit("115 存储设置已保存")
+                self.action_done.emit(i18n.t("115 存储设置已保存"))
             except Exception as exc:
-                self.qr_failed.emit(f"保存存储失败：{exc}")
+                self.qr_failed.emit(i18n.t("保存存储失败：{}", exc))
         threading.Thread(target=worker, daemon=True, name="openlist-storage-save").start()
 
     # ------------------------------------------------------------ 115 扫码登录
 
     def _scan_115(self) -> None:
         if not self._status.get("running"):
-            self.action_label.setText("先启动 OpenList")
+            self.action_label.setText(i18n.t("先启动 OpenList"))
             return
-        if not self._ask_busy_or_playing("登录 115"):
+        if not self._ask_busy_or_playing(i18n.t("登录 115")):
             return
         if self._qr_active:
             return
@@ -2500,7 +2612,7 @@ class CloudManagePanel(QWidget):
         self.qr_label.hide()
         self.cancel_qr_button.show()
         self.scan_button.setEnabled(False)
-        self.login_label.setText("正在获取二维码…")
+        self.login_label.setText(i18n.t("正在获取二维码…"))
         threading.Thread(target=self._qr_worker, args=(cancel,), daemon=True,
                          name="115-qr-login").start()
 
@@ -2522,7 +2634,7 @@ class CloudManagePanel(QWidget):
             except Exception as exc:
                 if cancel.is_set():
                     return
-                msg = f"状态查询失败，重试…（{str(exc)[:60]}）"
+                msg = i18n.t("状态查询失败，重试…（{}）", str(exc)[:60])
                 if msg != last:
                     self.qr_state.emit(msg)
                     last = msg
@@ -2530,45 +2642,45 @@ class CloudManagePanel(QWidget):
                 continue
             status = int(data.get("status", 0) or 0)
             if status == 0:
-                msg = "等待扫码…"
+                msg = i18n.t("等待扫码…")
             elif status == 1:
-                msg = "已扫码，请在手机上确认"
+                msg = i18n.t("已扫码，请在手机上确认")
             elif status == 2:
                 try:
                     cookie = self.client.qr_login_finish(token)
                     self.client.update_115_cookie(cookie)
                 except Exception as exc:
                     if not cancel.is_set():
-                        self.qr_failed.emit(f"115 登录失败：{exc}")
+                        self.qr_failed.emit(i18n.t("115 登录失败：{}", exc))
                     return
                 if not cancel.is_set():
-                    self.qr_done.emit("115 登录成功，存储已刷新")
+                    self.qr_done.emit(i18n.t("115 登录成功，存储已刷新"))
                 return
             elif status == -1:
                 if not cancel.is_set():
-                    self.qr_failed.emit("二维码已过期，请重新获取")
+                    self.qr_failed.emit(i18n.t("二维码已过期，请重新获取"))
                 return
             elif status == -2:
                 if not cancel.is_set():
-                    self.qr_failed.emit("已取消扫码")
+                    self.qr_failed.emit(i18n.t("已取消扫码"))
                 return
             else:
-                msg = f"扫码状态 {status}"
+                msg = i18n.t("扫码状态 {}", status)
             if msg != last:
                 self.qr_state.emit(msg)
                 last = msg
         if not cancel.is_set():
-            self.qr_failed.emit("二维码等待超时，请重新获取")
+            self.qr_failed.emit(i18n.t("二维码等待超时，请重新获取"))
 
     def _on_qr_ready(self, token: dict) -> None:
         pix = QPixmap()
         if not pix.loadFromData(token.get("png") or b""):
-            self._on_qr_failed("二维码图片解析失败")
+            self._on_qr_failed(i18n.t("二维码图片解析失败"))
             return
         self.qr_label.setPixmap(pix.scaled(210, 210, Qt.KeepAspectRatio,
                                            Qt.FastTransformation))
         self.qr_label.show()
-        self.login_label.setText("等待扫码…（二维码几分钟内有效）")
+        self.login_label.setText(i18n.t("等待扫码…（二维码几分钟内有效）"))
 
     def _set_login_text(self, text: str) -> None:
         self.login_label.setText(text)
@@ -2584,7 +2696,7 @@ class CloudManagePanel(QWidget):
     def _on_qr_done(self, text: str) -> None:
         self._qr_finish_ui()
         self.action_label.setText(text)
-        self.login_label.setText("已配置 115 Cookie")
+        self.login_label.setText(i18n.t("已配置 115 Cookie"))
         self.storage_changed.emit()
         self.refresh(force=True)
 
@@ -2597,7 +2709,7 @@ class CloudManagePanel(QWidget):
         if self._qr_cancel is not None:
             self._qr_cancel.set()
         self._qr_finish_ui()
-        self.login_label.setText("已取消扫码")
+        self.login_label.setText(i18n.t("已取消扫码"))
 
     # ------------------------------------------------------------ 云端缓存设置
 
@@ -2605,8 +2717,8 @@ class CloudManagePanel(QWidget):
         mode = "auto" if self.autostart_check.isChecked() else "manual"
         self.config.set("cloud.start_mode", mode)
         self.action_label.setText(
-            "网关将随软件启动、关窗一起停止" if mode == "auto"
-            else "已改为手动：启动/停止由这一页负责，退出软件不动外部进程")
+            i18n.t("网关将随软件启动、关窗一起停止") if mode == "auto"
+            else i18n.t("已改为手动：启动/停止由这一页负责，退出软件不动外部进程"))
 
     def _pick_cache(self) -> None:
         if self._loading_storage:
@@ -2615,13 +2727,13 @@ class CloudManagePanel(QWidget):
         if value is not None:
             self.config.set("cloud.live_cache_mb", int(value))
             self.action_label.setText(
-                f"云端缓存改为 {value} MB（下一次实时翻译生效）")
+                i18n.t("云端缓存改为 {} MB（下一次实时翻译生效）", value))
 
     def _pick_lead(self) -> None:
         value = self.lead_combo.currentData()
         if value is not None:
             self.config.set("cloud.live_lead_max", int(value))
-            self.action_label.setText(f"云端预读上限改为 {value} 秒")
+            self.action_label.setText(i18n.t("云端预读上限改为 {} 秒", value))
 
 
 CLEAN_CONSEQUENCES = {
@@ -2650,6 +2762,7 @@ class StoragePanel(QWidget):
         self.config = config
         self.pipeline = pipeline
         self.client = client
+        self._texts = _Texts(self)
         self._sizes: dict[str, QLabel] = {}
         self._titles: dict[str, QLabel] = {}
         self._scanning = False
@@ -2658,8 +2771,8 @@ class StoragePanel(QWidget):
         box = QVBoxLayout(body)
         box.setContentsMargins(16, 10, 16, 24)
         box.setSpacing(8)
-        box.addWidget(_section("占用概览"))
-        self.total_label = _hint("统计中…")
+        box.addWidget(self._texts.section("占用概览"))
+        self.total_label = _hint(i18n.t("统计中…"))
         box.addWidget(self.total_label)
         self.gateway_label = _hint("")
         self.gateway_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -2667,17 +2780,19 @@ class StoragePanel(QWidget):
         self.rows = QVBoxLayout()
         self.rows.setSpacing(8)
         box.addLayout(self.rows)
-        box.addWidget(_hint("删除与清理只动上面这些路径，绝不碰视频本身；"
-                            "有任务在跑时会拒绝清理。"))
+        box.addWidget(self._texts.hint("删除与清理只动上面这些路径，绝不碰视频本身；"
+                                       "有任务在跑时会拒绝清理。"))
         self.note_label = QLabel("", body)
         self.note_label.setObjectName("ValueLabel")
         self.note_label.setWordWrap(True)
         box.addWidget(self.note_label)
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
-        self.rescan_button = _mini_button("重新统计", lambda: self.reload())
+        self.rescan_button = _mini_button("", lambda: self.reload())
+        self._texts.label(self.rescan_button, "重新统计")
         buttons.addWidget(self.rescan_button)
-        self.clean_all_button = QPushButton("一键清理临时与缓存…")
+        self.clean_all_button = QPushButton("")
+        self._texts.label(self.clean_all_button, "一键清理临时与缓存…")
         theme.set_role(self.clean_all_button, "ghost")
         self.clean_all_button.clicked.connect(self._clean_all)
         buttons.addWidget(self.clean_all_button)
@@ -2688,6 +2803,12 @@ class StoragePanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+        i18n.bind(self, self._apply_texts)
+
+    def _apply_texts(self) -> None:
+        self._texts.apply()
+        self._render_total()       # 概览是拼出来的字符串，用上一次的数字重写
+        self.reload()              # 台账分类/条目名都在这时候重算
 
     # ------------------------------------------------------------ 行
 
@@ -2718,7 +2839,8 @@ class StoragePanel(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(3)
-        size_label = QLabel("统计中…" if size is None else storage.human_size(size), card)
+        size_label = QLabel(i18n.t("统计中…") if size is None
+                            else storage.human_size(size), card)
         size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         size_label.setObjectName("HintLabel")
         size_label.setToolTip(str(path))
@@ -2738,35 +2860,38 @@ class StoragePanel(QWidget):
     def _build_rows(self) -> None:
         self._clear_rows()
         for section, items in storage.sections(self.config):
-            self.rows.addWidget(_section(section))
+            self.rows.addWidget(_section(i18n.t(section)))
             for item in items:
-                actions = [("打开", lambda _=False, p=item.path: storage.reveal(p))]
+                actions = [(i18n.t("打开"), lambda _=False, p=item.path: storage.reveal(p))]
                 if item.clean:
                     actions.append(
-                        ("清理", lambda _=False, k=item.clean, n=item.label: self._clean(k, n)))
+                        (i18n.t("清理"),
+                         lambda _=False, k=item.clean, n=item.label: self._clean(k, n)))
                 if item.label == "字幕输出目录":
-                    actions.append(("字幕库…", self._open_library))
-                self._row(item.label, item.path, actions)
+                    actions.append((i18n.t("字幕库…"), self._open_library))
+                self._row(i18n.t(item.label), item.path, actions)
                 if item.note:
-                    self.rows.addWidget(_hint(item.note))
-        self.rows.addWidget(_section("模型（可删除）"))
-        self._row("转写模型目录", cfg.ASR_MODEL_DIR,
-                  [("打开", lambda _=False: storage.reveal(cfg.ASR_MODEL_DIR))])
-        self._row("翻译模型目录", cfg.LLM_MODEL_DIR,
-                  [("打开", lambda _=False: storage.reveal(cfg.LLM_MODEL_DIR))])
+                    self.rows.addWidget(_hint(i18n.t(item.note)))
+        self.rows.addWidget(_section(i18n.t("模型（可删除）")))
+        self._row(i18n.t("转写模型目录"), cfg.ASR_MODEL_DIR,
+                  [(i18n.t("打开"), lambda _=False: storage.reveal(cfg.ASR_MODEL_DIR))])
+        self._row(i18n.t("翻译模型目录"), cfg.LLM_MODEL_DIR,
+                  [(i18n.t("打开"), lambda _=False: storage.reveal(cfg.LLM_MODEL_DIR))])
         for model in storage.installed_models(self.config):
             # 用途放前面：中间省略会砍掉长文件名的中段，型号后缀先保住
-            title = (f"[{'、'.join(model.usage)}] {model.name}" if model.usage
-                     else model.name)
+            usage = "、".join(i18n.t(u) for u in model.usage)
+            title = (f"[{usage}] {model.name}" if model.usage else model.name)
             self._row(title, model.path,
-                      [("删除", lambda _=False, m=model: self._delete_model(m))],
+                      [(i18n.t("删除"),
+                        lambda _=False, m=model: self._delete_model(m))],
                       size=model.size)
         parts = storage.leftover_parts(self.config)
         if parts:
-            self.rows.addWidget(_section("没下完的断点"))
+            self.rows.addWidget(_section(i18n.t("没下完的断点")))
             for part in parts:
                 self._row(part.name, part,
-                          [("删除", lambda _=False, p=part: self._delete_part(p))],
+                          [(i18n.t("删除"),
+                            lambda _=False, p=part: self._delete_part(p))],
                           size=storage.path_size(part))
 
     def reload(self) -> None:
@@ -2783,11 +2908,11 @@ class StoragePanel(QWidget):
             path = Path(self.client.binary())
             origin = self.client.binary_origin()
             size = storage.human_size(storage.path_size(path))
-            self.gateway_label.setText(f"网关程序：{origin} · {size}\n"
-                                       f"{storage.display_path(path)}")
+            self.gateway_label.setText(i18n.t("网关程序：{} · {}\n{}", origin, size,
+                                              storage.display_path(path)))
             self.gateway_label.setToolTip(str(path))
         except cloud.CloudError as exc:
-            self.gateway_label.setText(f"网关程序：{exc}")
+            self.gateway_label.setText(i18n.t("网关程序：{}", exc))
 
     def on_show(self) -> None:
         self.reload()
@@ -2829,93 +2954,108 @@ class StoragePanel(QWidget):
         if "total" not in result:
             return
         self._scanning = False
+        self._last_total = result
+        self._render_total()
+
+    def _render_total(self) -> None:
+        result = getattr(self, "_last_total", None)
+        if not result:
+            return
         self.total_label.setText(
-            f"应用数据目录共 {storage.human_size(result.get('total') or 0)}，"
-            f"其中模型 {storage.human_size(result.get('models') or 0)}、"
-            f"缓存/临时/构建 {storage.human_size(result.get('scratch') or 0)}")
+            i18n.t("应用数据目录共 {}，其中模型 {}、缓存/临时/构建 {}",
+                   storage.human_size(result.get("total") or 0),
+                   storage.human_size(result.get("models") or 0),
+                   storage.human_size(result.get("scratch") or 0)))
 
     # ------------------------------------------------------------ 删除/清理
 
     def _busy_guard(self, action: str) -> bool:
         if self.pipeline.is_busy():
-            _warn(self, action, "有转写/翻译任务在跑，先在 AI 栏停止任务。")
+            _warn(self, action, i18n.t("有转写/翻译任务在跑，先在 AI 栏停止任务。"))
             return False
         return True
 
     def _delete_model(self, model: storage.ModelFile) -> None:
-        if not self._busy_guard("删除模型"):
+        if not self._busy_guard(i18n.t("删除模型")):
             return
-        usage = (f"\n它正在被使用：{'、'.join(model.usage)}" if model.usage else "")
-        if not _confirm(self, "删除模型",
-                        f"要从磁盘删除：\n{model.path}\n{storage.human_size(model.size)}"
-                        f"{usage}\n\n删除后要用就得重新下载。",
-                        "确定删除"):
+        usage = (i18n.t("\n它正在被使用：{}", "、".join(i18n.t(u) for u in model.usage))
+                 if model.usage else "")
+        if not _confirm(self, i18n.t("删除模型"),
+                        i18n.t("要从磁盘删除：\n{}\n{}{}\n\n删除后要用就得重新下载。",
+                               model.path, storage.human_size(model.size), usage),
+                        i18n.t("确定删除")):
             return
         try:
             note = storage.delete_model(model.kind, model.name, self.config)
         except storage.StorageError as exc:
-            _warn(self, "删除失败", str(exc))
+            _warn(self, i18n.t("删除失败"), str(exc))
             return
         self.note_label.setText(note)
         self.models_changed.emit()
         self.reload()
 
     def _delete_part(self, part: Path) -> None:
-        if not self._busy_guard("删除断点"):
+        if not self._busy_guard(i18n.t("删除断点")):
             return
         try:
             size = part.stat().st_size if part.is_file() else 0
             part.unlink(missing_ok=True)
         except OSError as exc:
-            _warn(self, "删除失败", f"删不掉 {part.name}：{exc}")
+            _warn(self, i18n.t("删除失败"), i18n.t("删不掉 {}：{}", part.name, exc))
             return
-        self.note_label.setText(f"已删除断点 {part.name}（{storage.human_size(size)}）")
+        self.note_label.setText(i18n.t("已删除断点 {}（{}）", part.name,
+                                       storage.human_size(size)))
         self.reload()
 
     def _clean(self, key: str, label: str) -> None:
-        if not self._busy_guard("清理"):
+        if not self._busy_guard(i18n.t("清理")):
             return
         if key == storage.GATEWAY_LEGACY_KEY and self.client is not None:
             try:
                 if Path(self.client.binary()) == storage.gateway_legacy_path():
-                    _warn(self, "清理", "当前网关跑的就是数据目录里那一份旧副本；"
-                                        "先用「网盘 → OpenList 服务」重启一次让它换到 App 内置的，再删。")
+                    _warn(self, i18n.t("清理"),
+                          i18n.t("当前网关跑的就是数据目录里那一份旧副本；"
+                                 "先用「网盘 → 网关服务」重启一次让它换到 App 内置的，再删。"))
                     return
             except cloud.CloudError:
                 pass
         count, size = storage.preview(key, self.config)
         if not count:
-            self.note_label.setText(f"「{label}」没有可清理的文件")
+            self.note_label.setText(i18n.t("「{}」没有可清理的文件", i18n.t(label)))
             return
-        if not _confirm(self, "清理",
-                        f"将清理「{label}」：{count} 个文件 · 约 {storage.human_size(size)}\n"
-                        f"{CLEAN_CONSEQUENCES.get(key, '')}", "确定清理"):
+        if not _confirm(self, i18n.t("清理"),
+                        i18n.t("将清理「{}」：{} 个文件 · 约 {}\n{}", i18n.t(label), count,
+                               storage.human_size(size),
+                               i18n.t(CLEAN_CONSEQUENCES.get(key, ""))),
+                        i18n.t("确定清理")):
             return
         removed, freed = storage.clean(key, self.config)
         cfg.append_log(f"清理「{label}」({key})：{removed} 个文件 · "
                        f"{storage.human_size(freed)}")
         self.note_label.setText(
-            f"已清理「{label}」{removed} 个文件 · 释放 {storage.human_size(freed)}")
+            i18n.t("已清理「{}」{} 个文件 · 释放 {}", i18n.t(label), removed,
+                   storage.human_size(freed)))
         self.models_changed.emit()
         self.reload()
 
     def _clean_all(self) -> None:
-        if not self._busy_guard("一键清理"):
+        if not self._busy_guard(i18n.t("一键清理")):
             return
         count, size = storage.clean_all(self.config, dry_run=True)
         if not count:
-            self.note_label.setText("临时文件与缓存都是干净的")
+            self.note_label.setText(i18n.t("临时文件与缓存都是干净的"))
             return
-        if not _confirm(self, "一键清理",
-                        "将清理临时音频、实时字幕、转写标记、翻译缓存、语言台账、"
-                        f"下载断点与日志：\n{count} 个文件 · 约 {storage.human_size(size)}\n"
-                        "模型和已生成的字幕不会动。", "确定清理"):
+        if not _confirm(self, i18n.t("一键清理"),
+                        i18n.t("将清理临时音频、实时字幕、转写标记、翻译缓存、语言台账、"
+                               "下载断点与日志：\n{} 个文件 · 约 {}\n"
+                               "模型和已生成的字幕不会动。", count, storage.human_size(size)),
+                        i18n.t("确定清理")):
             return
         removed, freed = storage.clean_all(self.config)
         cfg.append_log(f"一键清理临时与缓存：{removed} 个文件 · "
                        f"{storage.human_size(freed)}")
         self.note_label.setText(
-            f"已清理 {removed} 个文件 · 释放 {storage.human_size(freed)}")
+            i18n.t("已清理 {} 个文件 · 释放 {}", removed, storage.human_size(freed)))
         self.models_changed.emit()
         self.reload()
 

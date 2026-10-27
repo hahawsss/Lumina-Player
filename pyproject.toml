@@ -1,6 +1,6 @@
 [project]
 name = "lumina-player"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lumina Player - Mac 本地视频播放器（硬解/软解、多音轨字幕、默认语言、AI 转写与翻译）"
 requires-python = ">=3.11"
 dependencies = [

@@ -10,7 +10,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![内核](https://img.shields.io/badge/播放内核-libmpv%20%2B%20VideoToolbox-orange)
 ![授权](https://img.shields.io/badge/license-GPL--3.0-blue)
-![检查](https://img.shields.io/badge/自检-281%20项通过-brightgreen)
+![检查](https://img.shields.io/badge/自检-300%20项通过-brightgreen)
 
 </div>
 
@@ -42,6 +42,7 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 | ![轨道](assets/screenshots/tracks.png) | ![设置](assets/screenshots/settings.png) | ![列表](assets/screenshots/playlist.png) |
 
 侧栏六个标签：轨道 / AI / 设置 / 列表 / 存储 / 网盘。低频动作收在下拉里，不做成一屏按钮。
+**界面有中英两套**：侧栏标签下方和首屏右上角各有一个语言开关，中文界面下按钮写的是「English」——认不出中文也能一眼找到；也可以在「设置 → 界面」里选「跟随系统」。
 截图里的画面是 `scripts/make_shots.py` 用 ffmpeg 现造的合成测试片，不含任何真实影片。
 
 ---
@@ -71,17 +72,18 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 - **本地模型分工**：实时用小模型追速度（0.5B–3B），一键/整片用大模型慢慢翻（7B / Qwen3.5-9B / 14B）。下拉里选未下载的型号，按钮就变成下载，带断点续传与镜像回退。
 - **懂上下文**：可选把前 N 句原文/译文喂给模型，人称和称呼不会前后乱跳。
 - **不重复花钱**：翻过的句子进磁盘缓存，重看同一部片直接复用。
-- **产物归位**：每部片一个文件夹，`<片名>.原文.srt` / `<片名>.<语言>译文.srt` / `<片名>.双语.ass` 三份，重开片子自动挂回上次生成的字幕。
+- **产物归位**：每部片一个文件夹，`<片名>.原文.srt` / `<片名>.<语言>译文.srt` / `<片名>.双语.ass` 三份（英文界面写 `.original` / `.translated` / `.bilingual`），重开片子自动挂回上次生成的字幕；两种命名都认，旧产物不用改名。
 
-## 115 网盘直连
+## 网盘直连（OpenList）
 
 ![网盘与网关](assets/screenshots/service.png)
 
-- **网关已编译进 App**：OpenList（内含 115driver）由 `scripts/build_openlist.sh` 从源码构建，落在 `Lumina.app/Contents/Resources/bin/openlist`，只监听 `127.0.0.1`。**开软件它就起来，关软件它就收掉**，也可以改成手动启停 —— 不用你另外装任何东西。
+- **网关已编译进 App**：OpenList 由 `scripts/build_openlist.sh` 从源码构建，落在 `Lumina.app/Contents/Resources/bin/openlist`，只监听 `127.0.0.1`。**开软件它就起来，关软件它就收掉**，也可以改成手动启停 —— 不用你另外装任何东西。
+- **不止 115**：OpenList 支持 90 多种存储（阿里云盘、夸克、123、天翼、S3、WebDAV、OneDrive、Google Drive…）。「网盘」页从根目录列出**每个挂载点**，任意存储都能浏览、双击播放；点「添加存储…」按驱动字段新建挂载，OAuth 类网盘用「网页管理」在 OpenList 自带页面登录。
 - **播放地址永远不变**：Lumina 只认 loopback WebDAV，直链刷新交给网关；管理员 token 每次现读，不写进配置文件。
-- **单流 Range 代理**：115 CDN 对同一文件的第二条并发流会 403，所以云端实时翻译只向上游开**一条**顺序连接，字节放进内存块缓存，播放器和转写都从本机这一份缓存取数。**视频不落盘**。
+- **单流 Range 代理**：对同一文件开第二条并发流会被网盘拒绝，所以云端实时翻译只向上游开**一条**顺序连接，字节放进内存块缓存，播放器和转写都从本机这一份缓存取数。**视频不落盘**。
 - **不互抢**：走代理时会把播放器的预读压到与缓存匹配的量，并按码率换算预读秒数 —— 否则两条读流会互相把上游拽走，触发限流保护。
-- **扫码登录在软件里完成**，不用去网页后台。
+- **115 的扫码登录在软件里完成**，不用去网页后台。
 
 ## 透明与可维护
 
@@ -89,13 +91,13 @@ Lumina 不是 mpv 的皮肤：libmpv 以 in-process 方式画进自己的 GL 控
 - **存储台账**：每个产出、下载、缓存落在哪儿、占多大、能不能删，全在「存储」栏，按 *软件数据根 / 字幕产出 / 缓存与标记 / 网关与日志 / 构建与分发* 分类，每行都能"打开"进 Finder。**删除范围锁死在软件自己的数据目录内**，路径全部由代码算出，不写死常量。
 - **模型可以删**：转写与翻译模型逐个列出体积、标出"正在被谁用"，删除要确认、有任务在跑时拒绝；删掉在用的模型会自动改用替补并同步界面。
 - **崩溃可查**：应用日志、播放器日志、网关日志都有路径可点，异常都写文件（GUI 应用没有控制台）。
-- **有判据**：`scripts/selfcheck.py` 281 项结构自检（含硬解、内嵌、代理、语言识别、存储与隐私），另有 6 套端到端验证套件。
+- **有判据**：`scripts/selfcheck.py` 300 项结构自检（含硬解、内嵌、代理、语言识别、存储与隐私），另有 6 套端到端验证套件。
 
 ---
 
 ## 下载与安装
 
-去 [Releases](https://github.com/hahawsss/Lumina-Player/releases) 下载 `Lumina-0.1.0-macOS-arm64.zip`（约 188 MB，内含 Python 运行时、PySide6 与云盘网关），解压后把 `Lumina.app` 拖进「应用程序」。
+去 [Releases](https://github.com/hahawsss/Lumina-Player/releases) 下载 `Lumina-0.2.0-macOS-arm64.zip`（内含 Python 运行时、PySide6 与云盘网关），解压后把 `Lumina.app` 拖进「应用程序」。
 
 > **第一次打开请右键 →「打开」**（没有 Apple 开发者签名与公证），或者：
 > ```bash
@@ -121,7 +123,7 @@ cd Lumina-Player && ./start.sh            # 体检 → 建运行时 → 起播�
 ./scripts/build_openlist.sh   # 从源码编译云盘网关（钉版本，产物进构建缓存）
 ./scripts/make_app.sh         # 本机自用 .app：装进 /Applications，含上面的网关
 ./scripts/make_portable.sh    # 可分发 .app + zip（自带 Python 运行时；出包前强制解包复检签名与源码一致性）
-./scripts/verify_all.sh       # 六套验证 + 281 项自检
+./scripts/verify_all.sh       # 六套验证 + 300 项自检
 ./scripts/make_shots.py       # 重新生成 README 截图（只用合成素材）
 ```
 
@@ -161,7 +163,7 @@ cd Lumina-Player && ./start.sh            # 体检 → 建运行时 → 起播�
 | `work/` | 转写用的临时音频、抽取的内嵌字幕 | 可清 |
 | `work/live/` | 实时翻译的临时字幕，退出即清 | 可清 |
 | `cache/` | 翻译缓存、转写标记、每片语言台账 | 可清（清了会重转/重翻） |
-| `cloud/openlist/` | 网关数据目录：**115 登录状态与挂载配置在这里** | 保留（删了要重新扫码） |
+| `cloud/openlist/` | 网关数据目录：**所有网盘的登录状态与挂载配置在这里** | 保留（删了要重新登录/扫码） |
 | `build/` | 网关构建缓存（Go 工具链 + 源码 + module） | 可清，重编要重新下 |
 | `app.log` / `lumina.log` | 应用日志 / 播放器日志 | 可清 |
 
@@ -182,7 +184,7 @@ cd Lumina-Player && ./start.sh            # 体检 → 建运行时 → 起播�
 - **开发中项目**：0.1.x，配置项与界面结构可能变。
 - **未签名 / 未公证**：首次打开要右键 →「打开」。
 - **只在 Apple Silicon 上实测**：Intel Mac 未验证；Windows / Linux 没有适配计划。
-- **115 需要你自己授权**：首次要在「网盘 → OpenList 服务」里扫码；115 侧有请求频率限制，高码率长片的实时转写会受带宽影响。
+- **网盘要你自己授权**：115 在「网盘 → 网关服务」里扫码；其它网盘在「添加存储」里按字段填，或去「网页管理」登录。网盘侧有请求频率限制，高码率长片的实时转写会受带宽影响。
 - **实时翻译对模型大小敏感**：实时槽建议 ≤3B，9B/14B 留给整片或一键翻译。
 - **AI 功能要额外下载**：whisper 模型约 75 MB–1.5 GB，本地翻译模型约 0.46–9 GB；在线翻译自备密钥。
 

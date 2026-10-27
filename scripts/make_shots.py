@@ -31,7 +31,7 @@ if _packaged.is_dir():
 from PySide6.QtCore import QPoint, QRect  # noqa: E402
 from PySide6.QtGui import QPixmap, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
-from lumina import config as cfg  # noqa: E402
+from lumina import config as cfg, i18n  # noqa: E402
 from lumina.ui import theme  # noqa: E402
 from lumina.ui.main_window import MainWindow  # noqa: E402
 
@@ -124,20 +124,45 @@ def shot(window: MainWindow):
     return merged
 
 
+def build_demo_en() -> Path:
+    """英文截图用：同一条合成画面，只带英文一条字幕轨。
+
+    不去赌「语言偏好」的选轨逻辑 —— 截图要的是确定的画面。
+    base.mkv 可能是旧版本留下的、自带字幕轨的缓存，所以这里只显式映射画面与音轨。
+    """
+    base = build_demo()
+    target = DEMO_DIR / "demo-en.mkv"
+    if not (target.is_file() and target.stat().st_size > 100_000):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-i", str(base), "-i", str(DEMO_DIR / "en.srt"),
+                        "-map", "0:v", "-map", "0:a", "-map", "1",
+                        "-c", "copy", "-c:s", "srt",
+                        "-metadata:s:s:0", "language=eng", str(target)], check=True)
+    return target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only", nargs="*", default=list(PAGES))
-    parser.add_argument("--out", default=str(SHOTS))
+    parser.add_argument("--lang", choices=("zh", "en"), default="zh",
+                        help="界面语言；en 出到 assets/screenshots/en/")
+    parser.add_argument("--out", default="")
     args = parser.parse_args()
     want = [name for name in PAGES if not args.only or name in args.only]
 
-    media = build_demo()
-    out = Path(args.out)
+    media = build_demo_en() if args.lang == "en" else build_demo()
+    out = Path(args.out) if args.out else (SHOTS if args.lang == "zh" else SHOTS / "en")
     out.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication([])
     # 独立配置 + 独立字幕目录：截图跑完不在你的数据目录里留下任何痕迹
     temp_config = cfg.SUPPORT_DIR / "make_shots.toml"
     config = cfg.Config(temp_config)
+    config.set("ui.language", args.lang)
+    i18n.set_language(i18n.resolve(args.lang))
+    if args.lang == "en":
+        # 英文截图里字幕/音轨也用英文轨（演示片本身两条音轨、一条英文字幕轨）
+        config.set("languages.default_subtitle_langs", ["en"])
+        config.set("languages.default_audio_langs", ["en"])
     config.set("player.backend", "libmpv")
     config.set("subtitle.output_dir", str(DEMO_DIR / "subs"))
     config.set("subtitle.next_to_video", False)

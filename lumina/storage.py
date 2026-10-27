@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import config as cfg
+from . import config as cfg, i18n
 
 
 class StorageError(RuntimeError):
@@ -215,7 +215,7 @@ def model_dir(kind: str) -> Path:
         return cfg.ASR_MODEL_DIR
     if kind == "llm":
         return cfg.LLM_MODEL_DIR
-    raise StorageError(f"不认识模型类型：{kind}")
+    raise StorageError(i18n.t("不认识模型类型：{}", kind))
 
 
 def _matches(name: str, patterns: tuple[str, ...]) -> bool:
@@ -312,19 +312,19 @@ def delete_model(kind: str, name: str, config: cfg.Config) -> str:
     base = model_dir(kind).resolve()
     path = (base / name).resolve()
     if not _inside(path, base):
-        raise StorageError("只能删除模型目录里的文件")
+        raise StorageError(i18n.t("只能删除模型目录里的文件"))
     patterns = ASR_PATTERNS if kind == "asr" else LLM_PATTERNS
     if not _matches(path.name, patterns):
-        raise StorageError(f"{path.name} 不是可删除的模型文件")
+        raise StorageError(i18n.t("{} 不是可删除的模型文件", path.name))
     if not path.is_file():
-        raise StorageError(f"文件已经不存在：{path.name}")
+        raise StorageError(i18n.t("文件已经不存在：{}", path.name))
     size = path.stat().st_size
     try:
         path.unlink()
     except OSError as exc:
-        raise StorageError(f"删除失败：{exc}") from exc
+        raise StorageError(i18n.t("删除失败：{}", exc)) from exc
     cfg.append_log(f"删除模型：{path}（{human_size(size)}）")
-    note = f"已删除 {path.name}（{human_size(size)}）"
+    note = i18n.t("已删除 {}（{}）", path.name, human_size(size))
     keys = ({"asr": ("asr.model",),
              "llm": ("translate.llama_model", "translate.live_llama_model")}[kind])
     for key in keys:
@@ -529,7 +529,7 @@ def clean(key: str, config: cfg.Config, dry_run: bool = False) -> tuple[int, int
             except OSError:
                 continue
         return (removed, freed)
-    raise StorageError(f"不认识清理项：{key}")
+    raise StorageError(i18n.t("不认识清理项：{}", key))
 
 
 CLEAN_KEYS = ("live", "work", "transcripts", "translations", "language_hints",

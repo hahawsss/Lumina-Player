@@ -15,6 +15,8 @@ import threading
 import tomllib
 from pathlib import Path
 
+from . import i18n
+
 APP_NAME = "Lumina"
 KEYCHAIN_SERVICE = "Lumina Player"
 
@@ -45,7 +47,7 @@ SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".usfrt", ".lrc"}
 def media_filter() -> str:
     """文件对话框的媒体过滤串由 MEDIA_EXTS 生成，避免手写漏掉 wmv 这类格式。"""
     patterns = " ".join(f"*{ext}" for ext in sorted(MEDIA_EXTS))
-    return f"媒体文件 ({patterns});;所有文件 (*)"
+    return i18n.t("媒体文件 ({patterns});;所有文件 (*)", patterns=patterns)
 
 
 def _empty_dir(path: Path) -> Path:
@@ -527,7 +529,7 @@ def secret_set(name: str, value: str) -> None:
     args = ["security", "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", name, "-w", value]
     proc = subprocess.run(args, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"写入钥匙串失败: {proc.stderr.strip()}")
+        raise RuntimeError(i18n.t("写入钥匙串失败：{}", proc.stderr.strip()))
 
 
 def secret_delete(name: str) -> None:

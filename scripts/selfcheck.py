@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 
 from lumina import asr, config as cfg, langtags, storage, subtitles, translate  # noqa: E402
+from lumina.ui import panels  # noqa: E402
 from lumina.ui import theme  # noqa: E402
 from lumina.engine import MpvController  # noqa: E402
 from lumina.pipeline import PipelineError, SubtitlePipeline  # noqa: E402
@@ -1065,6 +1066,59 @@ def check_cloud_multi_storage() -> None:
     finally:
         server.shutdown()
         config.path.unlink(missing_ok=True)
+
+
+def check_i18n() -> None:
+    section("界面语言：词表 / 占位符 / 产物后缀 / 热切换")
+    from PySide6.QtWidgets import QLabel
+    from lumina import i18n, naming
+
+    def has_cjk(text: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+    bad = [key for key, value in i18n.EN.items() if has_cjk(value)]
+    check("英文词表里没有残留中文", not bad, bad[:4])
+    check("语言偏好解析（zh/en 显式，auto 有结果）",
+          i18n.resolve("zh") == "zh" and i18n.resolve("en") == "en"
+          and i18n.resolve("auto") in ("zh", "en"))
+
+    i18n.set_language("zh")
+    check("中文界面原样返回", i18n.t("播放") == "播放")
+    i18n.set_language("en")
+    check("英文界面查表", i18n.t("播放") == "Playback")
+    check("占位符按参数填充",
+          i18n.t("当前实际解码：{}", "videotoolbox") == "Actual decoder: videotoolbox")
+    check("漏翻的键原样回退并记账",
+          i18n.t("没有这个词条") == "没有这个词条"
+          and "没有这个词条" in i18n.missing())
+
+    label = QLabel("")
+    texts = panels._Texts(label)
+    texts.label(label, "播放")
+    i18n.set_language("zh")
+    i18n.retranslate()
+    zh_text = label.text()
+    i18n.set_language("en")
+    i18n.retranslate()
+    check("控件文字随语言热切换", (zh_text, label.text()) == ("播放", "Playback"),
+          (zh_text, label.text()))
+
+    i18n.set_language("zh")
+    check("中文产物后缀", naming.bilingual_name("片") == "片.双语.ass"
+          and naming.translated_name("片", "中文") == "片.中文译文.srt")
+    check("挂回字幕时两种后缀都认",
+          {p.name for p in naming.bilingual_candidates("片")}
+          == {"片.双语.ass", "片.bilingual.ass"}
+          and {p.name for p in naming.original_candidates("片")}
+          == {"片.原文.srt", "片.original.srt"})
+    i18n.set_language("en")
+    check("英文产物后缀",
+          naming.bilingual_name("film") == "film.bilingual.ass"
+          and naming.translated_name("film", "中文") == "film.Chinese.translated.srt")
+    check("英文界面也接受中文命名（旧产物不改名）",
+          "film.中文译文.srt" in naming.translated_globs("film", "中文"))
+    i18n.set_language("zh")
+    check("切回中文后产物后缀复原", naming.bilingual_name("film") == "film.双语.ass")
 
 
 def check_live_stream_budget() -> None:
@@ -2209,6 +2263,7 @@ def main() -> int:
     check_storage()
     check_cloud_lifecycle()
     check_cloud_multi_storage()
+    check_i18n()
     check_live_stream_budget()
     check_langtags()
     check_subtitles()

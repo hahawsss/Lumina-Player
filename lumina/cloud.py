@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import config as cfg
+from . import config as cfg, i18n
 from .media import MediaSource
 
 
@@ -74,8 +74,8 @@ class OpenList:
         for candidate in candidates:
             if candidate and Path(candidate).is_file():
                 return candidate
-        raise CloudError("App 里没有自带的 openlist，PATH 上也没找到；"
-                         "跑一次 scripts/build_openlist.sh 再重装 App")
+        raise CloudError(i18n.t("App 里没有自带的 openlist，PATH 上也没找到；"
+                                "跑一次 scripts/build_openlist.sh 再重装 App"))
 
     def running_binary(self) -> str:
         """端口上那份网关自己的可执行路径 —— 用来判断「是不是我们想跑的那一份」。"""
@@ -115,16 +115,16 @@ class OpenList:
         try:
             path = Path(self.binary()).resolve()
         except CloudError:
-            return "找不到"
+            return i18n.t("找不到")
         for bundled in bundle_binaries():
             if path == bundled.resolve():
-                return "App 内置"
+                return i18n.t("App 内置")
         if path == legacy_binary().resolve():
-            return "数据目录里的旧副本"
+            return i18n.t("数据目录里的旧副本")
         wanted = str(self.config.get("cloud.openlist_binary", "") or "")
         if wanted and Path(wanted).resolve() == path:
-            return "设置里指定的路径"
-        return "系统 PATH"
+            return i18n.t("设置里指定的路径")
+        return i18n.t("系统 PATH")
 
     def healthy(self) -> bool:
         try:
@@ -135,7 +135,7 @@ class OpenList:
 
     def ensure_running(self) -> None:
         if self._quitting:
-            raise CloudError("软件正在退出，不再带起网关")
+            raise CloudError(i18n.t("软件正在退出，不再带起网关"))
         if self.healthy():
             if self._proc is None:
                 # 别人（另一个实例、或用户自己开的）已经开着了：认领下来，但退出时不去抢着停
@@ -157,11 +157,11 @@ class OpenList:
             if self._proc is not proc:
                 return
             if proc.poll() is not None:
-                raise CloudError(f"OpenList 启动失败（退出码 {proc.returncode}）")
+                raise CloudError(i18n.t("OpenList 启动失败（退出码 {}）", proc.returncode))
             if self.healthy():
                 return
             time.sleep(0.3)
-        raise CloudError("OpenList 启动超时（看 cloud/openlist/server.out）")
+        raise CloudError(i18n.t("OpenList 启动超时（看 cloud/openlist/server.out）"))
 
     def stop(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
@@ -177,7 +177,7 @@ class OpenList:
     def autostart(self) -> tuple[bool, str]:
         """启动期带起服务。缺二进制/没初始化都不算致命：网盘打不开，本地播放照旧。"""
         if not self.autostart_wanted():
-            return (False, "手动模式：不随软件启动 OpenList")
+            return (False, i18n.t("手动模式：不随软件启动 OpenList"))
         try:
             if self.migration_needed():
                 have = self.running_binary()
@@ -186,8 +186,8 @@ class OpenList:
             self.ensure_running()
             self.token(force=True)
         except (CloudError, OSError, subprocess.SubprocessError) as exc:
-            return (False, f"OpenList 没能随软件启动：{exc}")
-        return (True, f"OpenList 已就绪（{self.base}）")
+            return (False, i18n.t("OpenList 没能随软件启动：{}", exc))
+        return (True, i18n.t("OpenList 已就绪（{}）", self.base))
 
     def should_stop_on_quit(self) -> bool:
         """只停我们带起来的网关。
@@ -217,13 +217,13 @@ class OpenList:
                     capture_output=True, text=True, timeout=12,
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
-                raise CloudError(f"读取 OpenList token 失败：{exc}") from exc
+                raise CloudError(i18n.t("读取 OpenList token 失败：{}", exc)) from exc
             for line in (proc.stdout or "").splitlines():
                 if line.startswith("Admin token:"):
                     self._token = line.split("Admin token:", 1)[1].strip()
                     if self._token:
                         return self._token
-            raise CloudError("OpenList 还没有管理员 token：先完成一次初始化/登录")
+            raise CloudError(i18n.t("OpenList 还没有管理员 token：先完成一次初始化/登录"))
 
     def api_headers(self) -> dict[str, str]:
         return {"Authorization": self.token()}
@@ -244,12 +244,12 @@ class OpenList:
                 reply = client.post(f"{self.base}/api/fs/list", json=body,
                                     headers=self.api_headers())
         except httpx.HTTPError as exc:
-            raise CloudError(f"读取 115 目录失败：{exc}") from exc
+            raise CloudError(i18n.t("读取目录失败：{}", exc)) from exc
         if reply.status_code >= 400:
-            raise CloudError(f"读取 115 目录失败：HTTP {reply.status_code}")
+            raise CloudError(i18n.t("读取目录失败：HTTP {}", reply.status_code))
         data = reply.json()
         if data.get("code") != 200:
-            raise CloudError(f"读取 115 目录失败：{data.get('message') or data.get('code')}")
+            raise CloudError(i18n.t("读取目录失败：{}", data.get("message") or data.get("code")))
         content = (data.get("data") or {}).get("content") or []
         return content
 
@@ -334,12 +334,12 @@ class OpenList:
                     reply = client.post(f"{self.base}{path}", json=body or {},
                                         headers=self.api_headers())
         except httpx.HTTPError as exc:
-            raise CloudError(f"OpenList 管理接口失败：{exc}") from exc
+            raise CloudError(i18n.t("OpenList 管理接口失败：{}", exc)) from exc
         if reply.status_code >= 400:
-            raise CloudError(f"OpenList 管理接口 HTTP {reply.status_code}")
+            raise CloudError(i18n.t("OpenList 管理接口 HTTP {}", reply.status_code))
         data = reply.json()
         if data.get("code") != 200:
-            raise CloudError(f"OpenList 管理接口失败：{data.get('message') or data.get('code')}")
+            raise CloudError(i18n.t("OpenList 管理接口失败：{}", data.get("message") or data.get("code")))
         return data
 
     def storage_list(self) -> list[dict]:
@@ -371,7 +371,7 @@ class OpenList:
                        remark: str = "") -> None:
         mount = "/" + mount_path.strip("/")
         if not mount.strip("/"):
-            raise CloudError("挂载路径不能为空")
+            raise CloudError(i18n.t("挂载路径不能为空"))
         payload = {
             "driver": driver, "mount_path": mount,
             "addition": json.dumps(addition, ensure_ascii=False),
@@ -391,7 +391,7 @@ class OpenList:
         for item in self.storage_list():
             if str(item.get("driver") or "") == "115 Cloud" or                     str(item.get("mount_path") or "").rstrip("/") == "/115":
                 return item
-        raise CloudError("OpenList 里没有 115 Cloud 存储")
+        raise CloudError(i18n.t("OpenList 里没有 115 Cloud 存储"))
 
     def storage(self, storage_id: int) -> dict:
         return (self._api("GET", "/api/admin/storage/get",
@@ -402,12 +402,12 @@ class OpenList:
 
     def update_115_cookie(self, cookie: str) -> None:
         if not cookie.strip():
-            raise CloudError("扫码结果里没有 cookie")
+            raise CloudError(i18n.t("扫码结果里没有 cookie"))
         storage = self.storage_115()
         try:
             addition = json.loads(storage.get("addition") or "{}")
         except ValueError as exc:
-            raise CloudError(f"115 存储配置不是合法 JSON：{exc}") from exc
+            raise CloudError(i18n.t("115 存储配置不是合法 JSON：{}", exc)) from exc
         addition["cookie"] = cookie
         addition["qrcode_token"] = ""
         addition["qrcode_source"] = "tv"
@@ -441,15 +441,15 @@ class OpenList:
                 data = payload.get("data") or {}
                 uid = str(data.get("uid") or "")
                 if reply.status_code >= 400 or not uid:
-                    raise CloudError(
-                        f"115 二维码接口失败：HTTP {reply.status_code} {payload.get('message') or ''}")
+                    raise CloudError(i18n.t("115 二维码接口失败：HTTP {} {}", reply.status_code,
+                                        payload.get("message") or ""))
                 image = client.get(
                     "https://qrcodeapi.115.com/api/1.0/mac/1.0/qrcode",
                     params={"uid": uid})
                 if image.status_code >= 400 or not image.content:
-                    raise CloudError(f"115 二维码图片失败：HTTP {image.status_code}")
+                    raise CloudError(i18n.t("115 二维码图片失败：HTTP {}", image.status_code))
         except httpx.HTTPError as exc:
-            raise CloudError(f"连接 115 二维码接口失败：{exc}") from exc
+            raise CloudError(i18n.t("连接 115 二维码接口失败：{}", exc)) from exc
         return {"uid": uid, "time": str(data.get("time") or ""),
                 "sign": str(data.get("sign") or ""),
                 "qrcode": str(data.get("qrcode") or ""),
@@ -467,7 +467,7 @@ class OpenList:
                             "sign": token["sign"], "_": int(time.time() * 1000)})
                 payload = reply.json()
         except httpx.HTTPError as exc:
-            raise CloudError(f"查询 115 扫码状态失败：{exc}") from exc
+            raise CloudError(i18n.t("查询 115 扫码状态失败：{}", exc)) from exc
         data = payload.get("data") or {}
         try:
             data["status"] = int(data.get("status", 0) or 0)
@@ -485,11 +485,12 @@ class OpenList:
                     data={"app": "tv", "account": token["uid"]})
                 payload = reply.json()
         except httpx.HTTPError as exc:
-            raise CloudError(f"完成 115 登录失败：{exc}") from exc
+            raise CloudError(i18n.t("完成 115 登录失败：{}", exc)) from exc
         data = payload.get("data") or {}
         cookie = data.get("cookie") or {}
         if not cookie:
-            raise CloudError(f"115 登录没有返回 cookie：{payload.get('message') or payload.get('state')}")
+            raise CloudError(i18n.t("115 登录没有返回 cookie：{}",
+                                    payload.get("message") or payload.get("state")))
         return "; ".join(f"{key}={value}" for key, value in cookie.items())
 
     def raw_url(self, path: str) -> str:
@@ -501,15 +502,15 @@ class OpenList:
                                     json={"path": path or "/", "password": ""},
                                     headers=self.api_headers())
         except httpx.HTTPError as exc:
-            raise CloudError(f"读取 115 下载地址失败：{exc}") from exc
+            raise CloudError(i18n.t("读取下载地址失败：{}", exc)) from exc
         if reply.status_code >= 400:
-            raise CloudError(f"读取 115 下载地址失败：HTTP {reply.status_code}")
+            raise CloudError(i18n.t("读取下载地址失败：HTTP {}", reply.status_code))
         data = reply.json()
         if data.get("code") != 200:
-            raise CloudError(f"读取 115 下载地址失败：{data.get('message') or data.get('code')}")
+            raise CloudError(i18n.t("读取下载地址失败：{}", data.get("message") or data.get("code")))
         url = str((data.get("data") or {}).get("raw_url") or "")
         if not url:
-            raise CloudError("OpenList 没有返回下载地址（raw_url 为空）")
+            raise CloudError(i18n.t("OpenList 没有返回下载地址（raw_url 为空）"))
         return url
 
     def source(self, path: str, display_name: str | None = None) -> MediaSource:

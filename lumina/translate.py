@@ -21,7 +21,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config as cfg
+from . import config as cfg, i18n
 from .langtags import base_of
 
 
@@ -129,7 +129,7 @@ def download_from_mirrors(urls, dest: Path, on_progress=None, cancel=None, *,
     for attempt in range(max(1, retries)):
         for url in urls:
             if cancel is not None and cancel.is_set():
-                raise error_cls("已取消下载")
+                raise error_cls(i18n.t("已取消下载"))
             try:
                 _download_one(url, part, dest, on_progress, cancel, on_note, chunk)
                 return dest
@@ -139,12 +139,12 @@ def download_from_mirrors(urls, dest: Path, on_progress=None, cancel=None, *,
                 host = url.split("/")[2] if "://" in url else url
                 errors.append(f"{host}: {exc}")
                 if on_note:
-                    on_note(f"{host} 断了（{exc}），自动重试…")
+                    on_note(i18n.t("{} 断了（{}），自动重试…", host, exc))
                 if cancel is not None and cancel.is_set():
                     raise error_cls("已取消下载")
                 time.sleep(1.0 + attempt)
-    raise error_cls("模型下载失败（已保留断点，再点一次会接着下）：\n"
-                    + "\n".join(errors[-6:]))
+    raise error_cls(i18n.t("模型下载失败（已保留断点，再点一次会接着下）：\n{}",
+                            "\n".join(errors[-6:])))
 
 
 def _download_one(url: str, part: Path, dest: Path, on_progress, cancel, on_note,
@@ -156,7 +156,7 @@ def _download_one(url: str, part: Path, dest: Path, on_progress, cancel, on_note
         with client.stream("GET", url, headers=headers) as reply:
             if offset and reply.status_code == 416:
                 part.unlink(missing_ok=True)
-                raise TranslationError("断点已失效，重新下载")
+                raise TranslationError(i18n.t("断点已失效，重新下载"))
             reply.raise_for_status()
             if offset and reply.status_code != 206:
                 offset = 0
@@ -164,7 +164,8 @@ def _download_one(url: str, part: Path, dest: Path, on_progress, cancel, on_note
             else:
                 mode = "ab" if offset else "wb"
             if on_note:
-                on_note(f"从 {offset / 1e6:.1f} MB 处继续下载…" if offset else "开始下载…")
+                on_note(i18n.t("从 {} MB 处继续下载…", f"{offset / 1e6:.1f}") if offset
+                        else i18n.t("开始下载…"))
             remaining = int(reply.headers.get("content-length") or 0)
             # 206 的绝对总长以 Content-Range 为准；只拿 content-length 会在
             # 某些镜像上把「剩余长度」和 offset 加错，进度就会超过 100%
@@ -179,7 +180,7 @@ def _download_one(url: str, part: Path, dest: Path, on_progress, cancel, on_note
                 total = offset + remaining if remaining else 0
             if total and offset >= total:
                 part.unlink(missing_ok=True)
-                raise TranslationError("断点比文件还大，重新下载")
+                raise TranslationError(i18n.t("断点比文件还大，重新下载"))
             done = offset
             with part.open(mode) as handle:
                 for data in reply.iter_bytes(chunk):
@@ -192,10 +193,11 @@ def _download_one(url: str, part: Path, dest: Path, on_progress, cancel, on_note
             size = part.stat().st_size
             if total and size != total:
                 raise TranslationError(
-                    f"下载长度不对（{size / 1e6:.1f} / {total / 1e6:.1f} MB），保留断点重试")
+                    i18n.t("下载长度不对（{} / {} MB），保留断点重试",
+                           f"{size / 1e6:.1f}", f"{total / 1e6:.1f}"))
     part.replace(dest)
     if on_note:
-        on_note("下载完成")
+        on_note(i18n.t("下载完成"))
 
 
 class Cache:
@@ -282,7 +284,7 @@ class Translator:
             text = out[0] if out else ""
             latency = (time.time() - started) * 1000
             if not text.strip():
-                return Probe(False, "返回了空结果", latency)
+                return Probe(False, i18n.t("返回了空结果"), latency)
             return Probe(True, f"{latency:.0f} ms · {text[:40]}", latency)
         except Exception as exc:
             return Probe(False, f"{type(exc).__name__}: {exc}", (time.time() - started) * 1000)
@@ -294,7 +296,8 @@ class OpenAICompat(Translator):
 
     def __init__(self, base_url: str, api_key: str, model: str, context_lines: int = 0):
         if not api_key:
-            raise TranslationError("没有 OpenAI 兼容接口的密钥（设置里填，或用环境变量 LUMINA_OPENAI_KEY）")
+            raise TranslationError(i18n.t(
+                "没有 OpenAI 兼容接口的密钥（设置里填，或用环境变量 LUMINA_OPENAI_KEY）"))
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -329,7 +332,7 @@ class OpenAICompat(Translator):
         data = reply.json()
         choices = data.get("choices") or []
         if not choices:
-            raise TranslationError(f"接口没有返回 choices: {json.dumps(data)[:200]}")
+            raise TranslationError(i18n.t("接口没有返回 choices: {}", json.dumps(data)[:200]))
         return (choices[0].get("message") or {}).get("content", "")
 
     def _context_prefix(self) -> str:
@@ -408,7 +411,7 @@ class DeepL(Translator):
 
     def __init__(self, api_key: str, free: bool = True):
         if not api_key:
-            raise TranslationError("没有 DeepL 密钥（设置里填，或用环境变量 LUMINA_DEEPL_KEY）")
+            raise TranslationError(i18n.t("没有 DeepL 密钥（设置里填，或用环境变量 LUMINA_DEEPL_KEY）"))
         self.api_key = api_key
         host = "api-free.deepl.com" if free else "api.deepl.com"
         self.url = f"https://{host}/v2/translate"
@@ -429,7 +432,7 @@ class DeepL(Translator):
         rows = reply.json().get("translations") or []
         out = [row.get("text", "") for row in rows]
         if len(out) != len(texts):
-            raise TranslationError(f"DeepL 返回 {len(out)} 条，期望 {len(texts)} 条")
+            raise TranslationError(i18n.t("DeepL 返回 {} 条，期望 {} 条", len(out), len(texts)))
         return out
 
 
@@ -450,8 +453,8 @@ class Argos(Translator):
             import argostranslate.package
             import argostranslate.translate
         except ImportError as exc:
-            raise TranslationError(
-                "本地引擎未安装：uv sync --extra offline  (装 argostranslate)") from exc
+            raise TranslationError(i18n.t(
+                "本地引擎未安装：uv sync --extra offline  (装 argostranslate)")) from exc
         self._module = (argostranslate.package, argostranslate.translate)
         return self._module
 
@@ -464,7 +467,7 @@ class Argos(Translator):
         available = [p for p in package_module.get_available_packages()
                      if p.from_code == from_code and p.to_code == to_code]
         if not available:
-            raise TranslationError(f"Argos 没有 {from_code}→{to_code} 语言包")
+            raise TranslationError(i18n.t("Argos 没有 {}→{} 语言包", from_code, to_code))
         available[0].download()
 
     def translate(self, texts, target, source=None, context=None):
@@ -572,7 +575,7 @@ def download_llm_model(name: str, on_progress=None,
     """和 whisper 模型一样：镜像优先、断点续传、短读超时自动重试。"""
     entry = LLM_MODELS.get(name)
     if not entry:
-        raise TranslationError(f"不认识的语言模型：{name}")
+        raise TranslationError(i18n.t("不认识的语言模型：{}", name))
     dest = llm_model_path(name)
     LLM_MODEL_DIR.mkdir(parents=True, exist_ok=True)
     if llm_model_ready(name):
@@ -607,15 +610,15 @@ class LlamaServer:
             deadline = time.time() + timeout
             while time.time() < deadline:
                 if proc.poll() is not None:
-                    raise TranslationError(
-                        f"llama-server 启动失败（退出码 {proc.returncode}）：模型文件可能损坏")
+                    raise TranslationError(i18n.t(
+                        "llama-server 启动失败（退出码 {}）：模型文件可能损坏", proc.returncode))
                 if cls._healthy(port):
                     cls._running[key] = (proc, base)
                     atexit.register(cls.shutdown_all)
                     return base
                 time.sleep(0.4)
             proc.terminate()
-            raise TranslationError("llama-server 启动超时（第一次加载模型要几十秒，再试一次看看）")
+            raise TranslationError(i18n.t("llama-server 启动超时（第一次加载模型要几十秒，再试一次看看）"))
 
     @staticmethod
     def _healthy(port: int) -> bool:
@@ -651,10 +654,11 @@ class LlamaCpp(OpenAICompat):
                  model: str | None = None):
         binary = find_llama_binary(config)
         if not binary:
-            raise TranslationError("没有 llama.cpp：brew install llama.cpp")
+            raise TranslationError(i18n.t("没有 llama.cpp：brew install llama.cpp"))
         model = str(model or config.get("translate.llama_model", "") or "")
         if not llm_model_ready(model):
-            raise TranslationError(f"本地模型没下载：{model or '（未选择）'}（AI 面板里点下载）")
+            raise TranslationError(i18n.t("本地模型没下载：{}（AI 面板里点下载）",
+                                          model or i18n.t("（未选择）")))
         base = LlamaServer.ensure(binary, llm_model_path(model))
         super().__init__(base, "local-only", model, context_lines=context_lines)
         self.model_label = model

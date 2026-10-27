@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import config as cfg
+from . import config as cfg, i18n
 
 _OBSERVED = (
     "time-pos", "pause", "idle-active", "eof-status", "track-list", "hwdec-current",
@@ -53,7 +53,7 @@ def find_mpv_binary(config: cfg.Config | None = None) -> str:
     for path in candidates:
         if path and Path(path).is_file() and os.access(path, os.X_OK):
             return path
-    raise MpvError("没找到 mpv 可执行文件，先装一个：brew install mpv")
+    raise MpvError(i18n.t("没找到 mpv 可执行文件，先装一个：brew install mpv"))
 
 
 def _supported_options(binary: str) -> set[str]:
@@ -262,7 +262,7 @@ class MpvController(QObject):
         args += list(self._extra)
         args = [a for a in args if self._option_ok(a)]
         if not any(a.startswith("--input-ipc-server") for a in args):
-            raise MpvError("这个 mpv 构建没有 --input-ipc-server，无法控制；请确认 brew install mpv 完成")
+            raise MpvError(i18n.t("这个 mpv 构建没有 --input-ipc-server，无法控制；请确认 brew install mpv 完成"))
         return args
 
     def _spawn(self) -> None:
@@ -372,16 +372,16 @@ class MpvController(QObject):
     def _send(self, payload: dict) -> None:
         sock = self._sock
         if sock is None:
-            raise MpvError("mpv 还没连上")
+            raise MpvError(i18n.t("mpv 还没连上"))
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
         with self._write_lock:
             sock.sendall(data)
 
     def call(self, command: list, timeout: float = 6.0):
         if self.proc is None and not self._spawning:
-            raise MpvError("mpv 还没启动")
+            raise MpvError(i18n.t("mpv 还没启动"))
         if not self._connected.wait(min(2.0, timeout)):
-            raise MpvError("mpv 未就绪")
+            raise MpvError(i18n.t("mpv 未就绪"))
         with self._lock:
             self._seq += 1
             rid = self._seq
@@ -391,12 +391,12 @@ class MpvController(QObject):
         if not slot[1].wait(timeout):
             with self._lock:
                 self._pending.pop(rid, None)
-            raise MpvError(f"mpv 超时未响应: {command[0]}")
+            raise MpvError(i18n.t("mpv 超时未响应：{}", command[0]))
         with self._lock:
             self._pending.pop(rid, None)
         reply = slot[0] or {}
         if reply.get("error") not in (None, "success"):
-            raise MpvError(f"{command[0]} 失败: {reply.get('error')}")
+            raise MpvError(i18n.t("{} 失败：{}", command[0], reply.get("error")))
         return reply.get("data")
 
     def get(self, name: str, default=None, timeout: float = 2.0):

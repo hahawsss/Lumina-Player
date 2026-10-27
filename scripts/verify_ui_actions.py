@@ -19,9 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, Qt  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, Qt  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLabel,  # noqa: E402
+                               QLineEdit, QPushButton, QToolButton)
 
 from lumina import asr, config as cfg, engine as mpv_engine, storage, translate  # noqa: E402
 from lumina.pipeline import SourceInfo  # noqa: E402
@@ -70,12 +71,18 @@ def main() -> int:
     config.set("player.backend", "ipc")
     config.set("cloud.start_mode", "manual")   # 测试进程不许启停/换血用户的网关
     config.set("player.embed_mpv", False)
+    config.set("ui.language", "zh")            # 断言的基准语言：跟随系统会让结果随机器变
     config.set("translate.cache", False)   # 别让旧译文缓存吞掉桩翻译的耗时
     ui_subtitles = cfg.WORK_DIR / "verify_ui_subtitles"
     config.set("subtitle.output_dir", str(ui_subtitles))
     import shutil
     shutil.rmtree(ui_subtitles, ignore_errors=True)   # 别自动挂回上一轮的字幕
+    from lumina import i18n as i18n_mod
+    i18n_mod.set_language(i18n_mod.resolve(config.get("ui.language")))
     window = MainWindow(config)
+    from lumina.app import build_menu
+    # 和 app.main 一样把菜单挂到语言切换上，切语言时整体重建
+    i18n_mod.bind(window, lambda: build_menu(app, window))
     # 无窗跑：保留 vo=gpu 才能真的走硬解，ao=null 静音
     real_launch = window.engine.launch
     window.engine.launch = lambda wid=None, extra=(): real_launch(
@@ -172,6 +179,68 @@ def main() -> int:
            not cramped and window.sidebar.buttons[0].y() != window.sidebar.buttons[3].y(),
            (cramped, [(b.text(), b.width(), b.sizeHint().width(), b.x(), b.y())
                       for b in window.sidebar.buttons]))
+    # --- 语言：切英文后标签/菜单跟着换，英文长词也不能把标签挤成省略号
+    window.set_language("en")
+    settle(app)
+    expect("切英文：侧栏六个标签是英文",
+           [b.text() for b in window.sidebar.buttons]
+           == ["Tracks", "AI", "Settings", "Playlist", "Storage", "Cloud"],
+           [b.text() for b in window.sidebar.buttons])
+    tight = [f"{b.text()}:{b.width()}<{b.sizeHint().width()}"
+             for b in window.sidebar.buttons if b.width() < b.sizeHint().width()]
+    expect("英文标签同样不被挤成省略号", not tight, tight)
+    expect("语言开关显示另一种语言",
+           window.sidebar.language_button.text() == "中文"
+           and window.welcome_language.text() == "中文",
+           (window.sidebar.language_button.text(), window.welcome_language.text()))
+    expect("设置页下拉与配置跟着切",
+           window.sidebar.settings.language_combo.currentData() == "en"
+           and config.get("ui.language") == "en")
+    expect("菜单栏整体换成英文",
+           [a.text() for a in window.menuBar().actions()][:4]
+           == ["File", "Playback", "View", "Help"],
+           [a.text() for a in window.menuBar().actions()])
+    # 英文模式下，可见控件里不许再出现中文 —— 语言自称与「切回中文」的开关本身除外
+    settle(app, 2.0)          # 后台体检/存储重扫是异步回来的，等它们落定再扫
+    # 无 exec() 的测试里 DeferredDelete 不会自己跑：台账重建时被 deleteLater 的旧标签
+    # 会留在树上，扫出来就成了「漏翻」。手动派发一次，让旧控件先死。
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    import re as _re
+    cjk = _re.compile(r"[\u4e00-\u9fff]")
+    endonyms = {name for _code, name in cfg.LANGUAGE_CHOICES}
+    exempt_combos = {window.sidebar.ai.lang_combo, window.sidebar.ai.target_combo,
+                     window.sidebar.tracks.video_combo, window.sidebar.tracks.audio_combo,
+                     window.sidebar.tracks.sub_combo}   # 轨名来自片源元数据，不是界面文案
+    leftovers: list[str] = []
+    for page in ("tracks", "ai", "settings", "playlist", "storage", "cloud"):
+        window.show_sidebar(page)
+        settle(app)
+        scope = [window.sidebar, window.overlay] if page == "tracks" else [window.sidebar]
+        for holder in scope:
+            for cls in (QLabel, QPushButton, QCheckBox, QToolButton):
+                for child in holder.findChildren(cls):
+                    text = child.text() if hasattr(child, "text") else ""
+                    if text and cjk.search(text) and text != "中文" and text not in endonyms:
+                        leftovers.append(f"{page}:{text[:30]}")
+            for combo in holder.findChildren(QComboBox):
+                if combo in exempt_combos:
+                    continue
+                for index in range(combo.count()):
+                    text = combo.itemText(index)
+                    if cjk.search(text) and text not in endonyms:
+                        leftovers.append(f"{page}:combo:{text[:30]}")
+            for edit in holder.findChildren(QLineEdit):
+                text = edit.placeholderText()
+                if text and cjk.search(text):
+                    leftovers.append(f"{page}:placeholder:{text[:30]}")
+    expect("英文界面里没有漏翻的中文控件文案",
+           not leftovers, sorted(set(leftovers))[:12])
+    window.set_language("zh")
+    settle(app)
+    expect("切回中文：标签复原", [b.text() for b in window.sidebar.buttons]
+           == list(panels.Sidebar.PAGES))
+    expect("中文界面下语言开关写 English（认不出中文的人也能找到）",
+           window.sidebar.language_button.text() == "English")
     window.show_sidebar("115")
     settle(app)
     expect("网盘标签默认落在 115 浏览", window.sidebar.cloud.stack.currentIndex() == 0,
@@ -184,9 +253,9 @@ def main() -> int:
            and all(hasattr(manage, name) for name in
                    ("scan_button", "save_storage_button", "cache_combo", "restart_button")),
            (window.sidebar.cloud.stack.currentIndex(), manage.isVisible()))
-    expect("网盘分段开关两项都在（115 文件 / OpenList 服务）",
+    expect("网盘分段开关两项都在（网盘文件 / 网关服务）",
            [b.text() for b in window.sidebar.cloud.buttons]
-           == ["115 文件", "OpenList 服务"],
+           == ["网盘文件", "网关服务"],
            [b.text() for b in window.sidebar.cloud.buttons])
     expect("管理页与主窗口用的是同一个网关客户端（管的确实是软件自己那个）",
            window.sidebar.cloud.client is window.cloud_client

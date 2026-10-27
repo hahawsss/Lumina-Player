@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import config as cfg
+from . import config as cfg, i18n
 
 # 全部对着 /opt/homebrew/include/mpv/{client.h,render.h} 抄的，别凭记忆改：
 # 事件号猜错不会报错，只会静悄悄收不到（EV_PROPERTY_CHANGE 是 22，不是 15）。
@@ -97,7 +97,7 @@ def libmpv_path(config: cfg.Config | None = None) -> str:
                       "/opt/homebrew/lib/libmpv.dylib"):
         if Path(candidate).is_file():
             return candidate
-    raise RuntimeError("找不到 libmpv.2.dylib，先 brew install mpv")
+    raise RuntimeError(i18n.t("找不到 libmpv.2.dylib，先 brew install mpv"))
 
 
 def load_lib(config: cfg.Config | None = None) -> ctypes.CDLL:
@@ -360,14 +360,14 @@ class LibmpvPlayer(QObject):
 
     def command(self, *args, timeout: float = 8.0):
         if not self.handle:
-            raise RuntimeError("mpv 未启动")
+            raise RuntimeError(i18n.t("mpv 未启动"))
         argv = (ctypes.c_char_p * (len(args) + 1))()
         for index, item in enumerate(args):
             argv[index] = str(item).encode("utf-8")
         argv[len(args)] = None
         rc = self.lib.mpv_command(self.handle, argv)
         if rc < 0:
-            raise RuntimeError(f"{args[0]} 失败 rc={rc}")
+            raise RuntimeError(i18n.t("{} 失败 rc={}", args[0], rc))
         return None
 
     def get(self, name: str, default=None, timeout: float = 2.0):

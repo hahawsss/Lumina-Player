@@ -10,13 +10,13 @@ A local video player for macOS. Open a file and it plays — audio and subtitle 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 ![Engine](https://img.shields.io/badge/engine-libmpv%20%2B%20VideoToolbox-orange)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
-![Checks](https://img.shields.io/badge/self--check-281%20passed-brightgreen)
+![Checks](https://img.shields.io/badge/self--check-300%20passed-brightgreen)
 
 </div>
 
-![Playback](assets/screenshots/player.png)
+![Playback](assets/screenshots/en/player.png)
 
-> The interface itself is currently **Chinese only** — every screenshot below shows Chinese labels. Playback, keyboard shortcuts and file formats work the same regardless.
+> The interface ships in **English and Chinese**: pick the language in Settings, or with the one-click switch in the sidebar / on the start screen (it shows the *other* language, so you can find it even if you can't read the current one). Screenshots below are the English UI.
 
 ---
 
@@ -37,11 +37,11 @@ Lumina is not an mpv skin: libmpv renders **in-process** inside its own `QOpenGL
 
 | AI subtitles | Storage & cleanup |
 |---|---|
-| ![AI panel](assets/screenshots/ai.png) | ![Storage panel](assets/screenshots/storage.png) |
+| ![AI panel](assets/screenshots/en/ai.png) | ![Storage panel](assets/screenshots/en/storage.png) |
 
 | Tracks & language | Playback settings | Playlist |
 |---|---|---|
-| ![Tracks](assets/screenshots/tracks.png) | ![Settings](assets/screenshots/settings.png) | ![Playlist](assets/screenshots/playlist.png) |
+| ![Tracks](assets/screenshots/en/tracks.png) | ![Settings](assets/screenshots/en/settings.png) | ![Playlist](assets/screenshots/en/playlist.png) |
 
 The sidebar has six tabs: Tracks / AI / Settings / Playlist / Storage / Cloud. Low-frequency actions live in dropdowns rather than filling the screen with buttons.
 All screenshots come from `scripts/make_shots.py`, which renders a synthetic test clip with ffmpeg — no real footage appears in them.
@@ -73,19 +73,20 @@ All screenshots come from `scripts/make_shots.py`, which renders a synthetic tes
 - **Model roles**: live translation uses a small model for speed (0.5B–3B); one-click / whole-file uses a big one at its own pace (7B / Qwen3.5-9B / 14B). Selecting a not-yet-downloaded model in the dropdown turns the button into a download, with resume and mirror fallback.
 - **Context aware**: optionally feed the previous N source/target sentences to the model so names and pronouns stop drifting.
 - **No double spending**: translated sentences are cached on disk; rewatching a film reuses them.
-- **Outputs in their place**: one folder per film with `<name>.原文.srt` / `<name>.<lang>译文.srt` / `<name>.双语.ass`, reattached automatically the next time you open that film.
+- **Outputs in their place**: one folder per film with `<name>.original.srt` / `<name>.<Lang>.translated.srt` / `<name>.bilingual.ass` (Chinese UI writes `<片名>.原文.srt` / `<片名>.<语言>译文.srt` / `<片名>.双语.ass`). Reattached automatically next time you open that film, and both naming schemes are recognised, so old files keep working.
 
-## Direct 115 cloud-drive playback
+## Cloud-drive playback (OpenList)
 
-![Cloud drive and gateway](assets/screenshots/service.png)
+![Cloud drive and gateway](assets/screenshots/en/service.png)
 
 [115 (115.com)](https://115.com) is a Chinese cloud drive; this section is about streaming from your own account without downloading first.
 
-- **The gateway is compiled into the app**: OpenList (which contains 115driver) is built from source by `scripts/build_openlist.sh` and lands at `Lumina.app/Contents/Resources/bin/openlist`, listening only on `127.0.0.1`. **It starts when the app starts and shuts down when the app quits**; manual start/stop is also available — you install nothing extra.
+- **The gateway is compiled into the app**: OpenList is built from source by `scripts/build_openlist.sh` and lands at `Lumina.app/Contents/Resources/bin/openlist`, listening only on `127.0.0.1`. **It starts when the app starts and shuts down when the app quits**; manual start/stop is also available — you install nothing extra.
+- **Not just 115**: OpenList supports 90+ storages (Aliyun Drive, Quark, 123, S3, WebDAV, OneDrive, Google Drive…). The Cloud tab lists **every mount** from the gateway root — browse and double-click to play any of them; **Add storage…** creates a new mount from the driver's own fields, and OAuth drives sign in through **Web admin** (OpenList's bundled UI).
 - **The playback URL never changes**: Lumina only talks to loopback WebDAV, and the gateway handles refreshing direct links. The admin token is read fresh each time and never written into config.
-- **Single-stream Range proxy**: the 115 CDN returns 403 for a second concurrent stream of the same file, so live translation from the cloud opens exactly **one** sequential upstream connection, keeps bytes in an in-memory block cache, and both the player and the transcriber read from that local copy. **Video is never written to disk.**
+- **Single-stream Range proxy**: a second concurrent stream of the same file gets rejected upstream, so live translation from the cloud opens exactly **one** sequential connection, keeps bytes in an in-memory block cache, and both the player and the transcriber read from that local copy. **Video is never written to disk.**
 - **No self-inflicted contention**: when proxying, the player's read-ahead is capped to match the cache and converted to seconds from the bitrate — otherwise the two readers tug the single upstream stream apart and trip the throttle.
-- **QR login happens inside the app**, not in a web admin panel.
+- **115's QR login happens inside the app**, not in a web admin panel.
 
 ## Transparent and maintainable
 
@@ -93,13 +94,13 @@ All screenshots come from `scripts/make_shots.py`, which renders a synthetic tes
 - **Storage ledger**: every output, download and cache entry shows its path, size and whether it can be deleted, in the Storage tab, grouped as *app data root / subtitle outputs / cache & markers / gateway & logs / build & distribution*. Each row opens in Finder. **Deletion is confined to the app's own data directory**, and every path is computed by code rather than hardcoded.
 - **Models are deletable**: transcription and translation models are listed individually with sizes and "who is using this"; deletion asks for confirmation and refuses while a job runs. Deleting an in-use model switches to a replacement and updates the UI.
 - **Crashes are investigable**: app log, player log and gateway log are all clickable paths; exceptions go to files (a GUI app has no console).
-- **Judged, not eyeballed**: `scripts/selfcheck.py` runs 281 structural checks (hardware decoding, embedding, proxy, language detection, storage, privacy) plus six end-to-end suites.
+- **Judged, not eyeballed**: `scripts/selfcheck.py` runs 300 structural checks (hardware decoding, embedding, proxy, language detection, storage, privacy) plus six end-to-end suites.
 
 ---
 
 ## Download and install
 
-Grab `Lumina-0.1.0-macOS-arm64.zip` (~188 MB, bundles the Python runtime, PySide6 and the cloud gateway) from [Releases](https://github.com/hahawsss/Lumina-Player/releases), unzip and drag `Lumina.app` into Applications.
+Grab `Lumina-0.2.0-macOS-arm64.zip` (bundles the Python runtime, PySide6 and the cloud gateway) from [Releases](https://github.com/hahawsss/Lumina-Player/releases), unzip and drag `Lumina.app` into Applications.
 
 > **On first launch use right-click → Open** (ad-hoc signed, not notarised by Apple), or:
 > ```bash
@@ -125,7 +126,7 @@ Double-clicking **「启动 Lumina.command」** in the repository root also work
 ./scripts/build_openlist.sh   # compile the cloud gateway from source (pinned version, cached)
 ./scripts/make_app.sh         # local .app installed into /Applications, gateway included
 ./scripts/make_portable.sh    # distributable .app + zip (own Python runtime; re-extracts the zip before shipping to re-verify the code signature and that the bundled source equals the repo)
-./scripts/verify_all.sh       # six suites + 281 self-checks
+./scripts/verify_all.sh       # six suites + 300 self-checks
 ./scripts/make_shots.py       # regenerate the README screenshots (synthetic material only)
 ```
 
@@ -165,7 +166,7 @@ Everything is under `~/Library/Application Support/Lumina/` — uninstalling mea
 | `work/` | temporary audio for transcription, extracted embedded subtitles | yes |
 | `work/live/` | live-translation temp subtitles, cleared on exit | yes |
 | `cache/` | translation cache, transcription markers, per-film language ledger | yes (causes re-transcribe / re-translate) |
-| `cloud/openlist/` | gateway data directory: **your 115 login state and mount config live here** | keep (deleting means re-scanning the QR) |
+| `cloud/openlist/` | gateway data directory: **login state and mount config for every cloud drive live here** | keep (deleting means signing in again) |
 | `build/` | gateway build cache (Go toolchain + source + modules) | yes (rebuild re-downloads) |
 | `app.log` / `lumina.log` | app log / player log | yes |
 
@@ -186,7 +187,7 @@ Everything is under `~/Library/Application Support/Lumina/` — uninstalling mea
 - **Work in progress**: 0.1.x — config keys and UI structure may still change.
 - **Unsigned / not notarised**: first launch needs right-click → Open.
 - **Tested only on Apple Silicon**: Intel Macs unverified; Windows / Linux are not on the roadmap.
-- **You authorise 115 yourself**: the first run requires a QR scan under Cloud → OpenList service. 115 rate-limits requests, so live transcription of long, high-bitrate films is bandwidth-sensitive.
+- **You authorise the cloud drives yourself**: 115 needs a QR scan under Cloud → Service; other drives are configured with **Add storage** or through **Web admin**. Drives rate-limit requests, so live transcription of long, high-bitrate films is bandwidth-sensitive.
 - **Live translation is model-size sensitive**: keep the live slot at ≤3B; leave 9B/14B for whole-file or one-click runs.
 - **AI features need extra downloads**: whisper models ~75 MB–1.5 GB, local translation models ~0.46–9 GB; online translation needs your own key.
 

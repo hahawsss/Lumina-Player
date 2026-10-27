@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config as cfg
+from . import config as cfg, i18n
 from .subtitles import Cue, split_long_cues
 
 MODELS = {
@@ -136,7 +136,7 @@ def find_binary(name: str) -> str:
         candidate = Path(prefix) / name
         if candidate.is_file():
             return str(candidate)
-    raise AsrError(f"找不到 {name}，请先安装：brew install whisper-cpp ffmpeg")
+    raise AsrError(i18n.t("找不到 {}，请先安装：brew install whisper-cpp ffmpeg", name))
 
 
 _STREAM_BREAK = ("Stream ends prematurely", "Error during demuxing",
@@ -186,6 +186,11 @@ def availability_cached(config: cfg.Config, ttl: float = 300.0) -> tuple[bool, s
 
 def availability_key(config: cfg.Config) -> str:
     return f"{config.get('asr.binary')}|{config.get('asr.model')}"
+
+
+def clear_availability() -> None:
+    """可用性文案是拼好的字符串：切界面语言后必须重算，否则一直显示旧语言。"""
+    _AVAIL.clear()
 
 
 def availability_now(config: cfg.Config) -> tuple[bool, str] | None:
@@ -250,8 +255,8 @@ class Whisper:
             return False, str(exc)
         model = self.model_path()
         if model is None:
-            return False, f"缺少模型 {self.config.get('asr.model')}，在设置里下载"
-        return True, f"{Path(self.binary).name} · {model.name} · Metal 加速"
+            return False, i18n.t("缺少模型 {}，在设置里下载", self.config.get("asr.model"))
+        return True, i18n.t("{} · {} · Metal 加速", Path(self.binary).name, model.name)
 
     def model_path(self) -> Path | None:
         wanted = self.config.get("asr.model", "ggml-small-q5_1.bin")
@@ -445,13 +450,13 @@ class Whisper:
         if proc.poll() == 143 or (cancel and cancel.is_set()):
             raise AsrError("已取消")
         if proc.returncode != 0:
-            raise AsrError(f"抽取音频失败: {stderr.strip()[:300]}")
+            raise AsrError(i18n.t("抽取音频失败：{}", stderr.strip()[:300]))
         if not out_wav.exists() or out_wav.stat().st_size < 1000:
             detail = (stderr or "").strip()[-300:] or "输出为空"
             cfg.append_log(f"抽取音频失败：{media} · {detail}")
             if is_stream_break(detail):
-                raise AsrError(f"音频流读取被掐断：{detail}")
-            raise AsrError(f"这条素材里没有可转写的音轨：{detail}")
+                raise AsrError(i18n.t("音频流读取被掐断：{}", detail))
+            raise AsrError(i18n.t("这条素材里没有可转写的音轨：{}", detail))
         return out_wav
 
     # ------------------------------------------------------------ 跑模型
@@ -461,7 +466,7 @@ class Whisper:
         self.prepare()
         model = self.model_path()
         if model is None:
-            raise AsrError("没有可用的 whisper 模型")
+            raise AsrError(i18n.t("没有可用的 whisper 模型"))
         threads = int(self.config.get("asr.threads", 0) or 0) or (4 if beam <= 1 else 0)
         args = [self.binary, "--model", str(model), "--file", str(wav),
                 "--language", (lang or "auto")]
@@ -548,13 +553,13 @@ class Whisper:
                 cfg.append_log(f"whisper 已取消：{where} · 已生成 {len(cues)} 句 · {elapsed:.0f}s")
             raise AsrError("已取消")
         if returncode not in (0, None):
-            detail = (f"whisper 提前退出（rc={returncode}，{where}），"
-                      f"只生成 {len(cues)} 句，字幕不完整")
+            detail = i18n.t("whisper 提前退出（rc={}，{}），只生成 {} 句，字幕不完整",
+                            returncode, where, len(cues))
             cfg.append_log(detail)
             raise AsrError(detail)
         if saw_progress and last_ratio < 0.9:
-            detail = (f"whisper 只处理到 {last_ratio:.0%} 就退出了（{where}），"
-                      f"只生成 {len(cues)} 句，字幕不完整")
+            detail = i18n.t("whisper 只处理到 {} 就退出了（{}），只生成 {} 句，字幕不完整",
+                            f"{last_ratio:.0%}", where, len(cues))
             cfg.append_log(detail)
             raise AsrError(detail)
         if log:
@@ -603,12 +608,12 @@ class Whisper:
         cfg.append_log(f"整片转写开始：{name} · {duration / 60:.1f} 分钟 · 语言={lang}")
         started = time.time()
         if stage:
-            stage("抽取音频…")
+            stage(i18n.t("抽取音频…"))
         try:
             self.extract_audio(media, wav, cancel=cancel, audio_index=audio_index,
                                headers=headers, user_agent=user_agent)
             if stage:
-                stage("转写中…")
+                stage(i18n.t("转写中…"))
             cues = self._run(wav, lang, cancel, on_cue=on_cue, on_progress=on_progress,
                              log=True)
         finally:
@@ -643,7 +648,7 @@ class Whisper:
             label = f"第 {index + 1}/{total} 段（{_clock(t0)}–{_clock(chunk_end)}）"
             wav = cfg.WORK_DIR / f"{stem}-part-{int(t0)}.wav"
             if stage:
-                stage(f"{label} · 抽取音频…")
+                stage(i18n.t("{} · 抽取音频…", label))
             try:
                 self.extract_audio(media, wav, t0=t0, duration=length, cancel=cancel,
                                    audio_index=audio_index, headers=headers,
@@ -651,7 +656,7 @@ class Whisper:
             except AsrError as exc:
                 if cancel.is_set() or "取消" in str(exc):
                     raise AsrError("已取消") from exc
-                raise AsrError(f"{label} 抽取音频失败：{exc}") from exc
+                raise AsrError(i18n.t("{} 抽取音频失败：{}", label, exc)) from exc
 
             chunk_cues: list[Cue] = []
 
@@ -675,7 +680,7 @@ class Whisper:
                     on_progress(last_overall)
 
             if stage:
-                stage(f"{label} · 转写中…")
+                stage(i18n.t("{} · 转写中…", label))
             try:
                 for attempt in range(2):
                     if cancel.is_set():
@@ -690,10 +695,10 @@ class Whisper:
                         if attempt == 0:
                             cfg.append_log(f"{label} 转写失败，重试：{exc}")
                             if stage:
-                                stage(f"{label} · 重试…")
+                                stage(i18n.t("{} · 重试…", label))
                             time.sleep(1.0)
                             continue
-                        raise AsrError(f"{label} 转写失败：{exc}") from exc
+                        raise AsrError(i18n.t("{} 转写失败：{}", label, exc)) from exc
             finally:
                 wav.unlink(missing_ok=True)
 

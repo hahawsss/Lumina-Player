@@ -173,14 +173,14 @@ class SubtitlePipeline(QObject):
                 except OSError:
                     followed = False
                 if not followed:
-                    self.notice.emit(f"视频目录写不进去，这一部的字幕落到 {root}")
+                    self.notice.emit(i18n.t("视频目录写不进去，这一部的字幕落到 {}", root))
             elif wanted:
                 try:
                     usable = root == Path(wanted).expanduser().resolve()
                 except OSError:
                     usable = False
                 if not usable:
-                    self.notice.emit(f"输出目录「{wanted}」用不了，这一部落到 {root}")
+                    self.notice.emit(i18n.t("输出目录「{}」用不了，这一部落到 {}", wanted, root))
             self.sub_folder = root / self.media_stem
         try:
             self.sub_folder.mkdir(parents=True, exist_ok=True)
@@ -401,8 +401,8 @@ class SubtitlePipeline(QObject):
         if self.ai_pid is None:
             return False
         legacy = "" if self.transcript_complete() else \
-            "（旧版，未确认整片完整；点「一键翻译」会重新转写）"
-        self.notice.emit(f"已自动载入上次生成的字幕：{len(self.cues)} 句{legacy}")
+            i18n.t("（旧版，未确认整片完整；点「一键翻译」会重新转写）")
+        self.notice.emit(i18n.t("已自动载入上次生成的字幕：{} 句{}", len(self.cues), legacy))
         return True
 
     def stop_all(self) -> None:
@@ -496,7 +496,7 @@ class SubtitlePipeline(QObject):
         if self.ai_pid is None:
             self.ai_pid = self.engine.add_subtitle(str(self.output_path), select=True)
             if self.ai_pid is None:
-                self.error.emit("字幕轨挂载失败：mpv 没有接受生成的字幕文件")
+                self.error.emit(i18n.t("字幕轨挂载失败：mpv 没有接受生成的字幕文件"))
                 return
         else:
             try:
@@ -505,7 +505,7 @@ class SubtitlePipeline(QObject):
                 if self.engine.get("sid") == self.ai_pid:
                     self.engine.reload_subtitle()
             except Exception as exc:
-                self.error.emit(f"刷新字幕轨失败：{exc}")
+                self.error.emit(i18n.t("刷新字幕轨失败：{}", exc))
 
     # ------------------------------------------------------------ 模式
 
@@ -527,12 +527,13 @@ class SubtitlePipeline(QObject):
             # 不要求他先点一次「翻译这条字幕」。
             current = next((t for t in self.engine.tracks_of("sub") if t.get("selected")), None)
             if current is not None and current.get("id") != self.ai_pid:
-                self.notice.emit(f"正在取回 {langtags.language_name(current.get('lang'))}字幕原文…")
+                self.notice.emit(i18n.t("正在取回 {} 字幕原文…",
+                                        naming.lang_name(langtags.language_name(current.get("lang")))))
                 self.translate_track(current)
                 return
-            self.notice.emit("没有可用的字幕来源：先选一条字幕，或在 AI 面板生成字幕")
+            self.notice.emit(i18n.t("没有可用的字幕来源：先选一条字幕，或在 AI 面板生成字幕"))
             return
-        self._spawn(self._translate_existing, "翻译字幕")
+        self._spawn(self._translate_existing, i18n.t("翻译字幕"))
 
     def cycle_display(self) -> str:
         order = ["original", "bilingual", "translated"]
@@ -544,23 +545,23 @@ class SubtitlePipeline(QObject):
     def resolve_source(self, track: dict) -> SourceInfo:
         media = self.current_media
         if not media:
-            raise PipelineError("没有正在播放的文件")
+            raise PipelineError(i18n.t("没有正在播放的文件"))
         subs = [t for t in self.engine.tracks_of("sub") if not t.get("external")]
         if track.get("external"):
             path = self._find_external_file(track)
             if path is None:
-                raise PipelineError("这条外挂字幕我定位不到文件路径，请用面板里的「添加字幕文件」重新加载")
+                raise PipelineError(i18n.t("这条外挂字幕我定位不到文件路径，请用面板里的「添加字幕文件」重新加载"))
             cues = subtitles.load_subtitle(path)
             if not cues:
-                raise PipelineError(f"{path.name} 解析出来是空的")
+                raise PipelineError(i18n.t("{} 解析出来是空的", path.name))
             return SourceInfo(cues, track.get("lang") or "", "external", path)
 
         codec = (track.get("codec") or "").lower()
         if codec in BITMAP_CODECS:
-            raise PipelineError("这是图形字幕（PGS/VobSub 位图），只能 OCR 才能转文字，本播放器暂未内置 OCR")
+            raise PipelineError(i18n.t("这是图形字幕（PGS/VobSub 位图），只能 OCR 才能转文字，本播放器暂未内置 OCR"))
         nth = next((i for i, t in enumerate(subs) if t.get("id") == track.get("id")), -1)
         if nth < 0:
-            raise PipelineError("这条字幕已经不是内嵌轨了")
+            raise PipelineError(i18n.t("这条字幕已经不是内嵌轨了"))
         headers = self.media_source.headers if self.media_source else None
         user_agent = self.media_source.user_agent if self.media_source else ""
         streams = subtitle_streams(media, headers=headers, user_agent=user_agent)
@@ -578,7 +579,7 @@ class SubtitlePipeline(QObject):
                     if alt:
                         target_index = alt["index"]
         if target_index is None:
-            raise PipelineError("用 ffprobe 没找到对应的字幕流")
+            raise PipelineError(i18n.t("用 ffprobe 没找到对应的字幕流"))
         out = (Path(cfg.WORK_DIR) / self.media_stem
                / f"source-{track.get('id')}.srt")
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -594,13 +595,13 @@ class SubtitlePipeline(QObject):
             if proc.returncode == 0 and out.exists() and out.stat().st_size > 8:
                 break
         else:
-            raise PipelineError(f"抽取内嵌字幕失败：{proc.stderr.strip()[:200]}")
+            raise PipelineError(i18n.t("抽取内嵌字幕失败：{}", proc.stderr.strip()[:200]))
         if codec_out == "srt":
             cues = subtitles.load_subtitle(out)
         else:
             cues = subtitles.parse_ass(out.read_text(encoding="utf-8", errors="replace"))
         if not cues:
-            raise PipelineError("抽出来的字幕是空的（可能是图形字幕）")
+            raise PipelineError(i18n.t("抽出来的字幕是空的（可能是图形字幕）"))
         return SourceInfo(cues, track.get("lang") or "", "embedded", out)
 
     def _find_external_file(self, track: dict) -> Path | None:
@@ -790,9 +791,10 @@ class SubtitlePipeline(QObject):
             # 保留上下文时按时间顺序翻，保证上下文真的是“前文”
             groups.sort(key=lambda group: self.cues[group[0]].start)
         done = sum(1 for value in self.translated if value)
+        engine_label = i18n.t(translate.engine_labels().get(translator.name, translator.name))
         self.progress.emit(
-            f"翻译（{translate.engine_labels().get(translator.name, translator.name)}"
-            f" → {cfg.lang_display(target)}）", done, total)
+            i18n.t("翻译（{} → {}）", engine_label,
+                   naming.lang_name(cfg.lang_display(target))), done, total)
         workers = 3 if translator.name in ("openai", "deepl") else 1
         if getattr(translator, "context_lines", 0) > 0:
             workers = 1          # 保留上下文时必须按顺序翻，否则上下文会乱序
@@ -831,22 +833,22 @@ class SubtitlePipeline(QObject):
             if origin != "ai" or self.transcript_complete():
                 self._write_marker(True)
         left = self.untranslated_count()
-        target_name = cfg.lang_display(self.target)
+        target_name = naming.lang_name(cfg.lang_display(self.target))
         if not left:
-            self.progress.emit("翻译完成", total, total)
+            self.progress.emit(i18n.t("翻译完成"), total, total)
         else:
-            self.progress.emit(f"翻译完成 · {left} 句原样未翻",
+            self.progress.emit(i18n.t("翻译完成 · {} 句原样未翻", left),
                                max(0, total - left), total)
             self.error.emit(
-                f"有 {left} 句模型原样返回、没有翻成{target_name}；"
-                "建议在 AI 栏换 3B 或更大的翻译模型")
-        extra = f" · {left} 句原样未翻" if left else ""
-        self.notice.emit(f"翻译完成：{total} 条{extra} · 缓存命中 "
-                         f"{self.cache.hits}/{self.cache.hits + self.cache.misses}")
+                i18n.t("有 {} 句模型原样返回、没有翻成{}；"
+                       "建议在 AI 栏换 3B 或更大的翻译模型", left, target_name))
+        extra = i18n.t(" · {} 句原样未翻", left) if left else ""
+        self.notice.emit(i18n.t("翻译完成：{} 条{} · 缓存命中 {}/{}", total, extra,
+                                self.cache.hits, self.cache.hits + self.cache.misses))
 
     def _translate_existing(self, cancel: threading.Event) -> None:
         if self.source is None:
-            raise PipelineError("还没选定要翻译的字幕轨")
+            raise PipelineError(i18n.t("还没选定要翻译的字幕轨"))
         self._translate_all(cancel)
 
     # ------------------------------------------------------------ AI 字幕
@@ -867,7 +869,7 @@ class SubtitlePipeline(QObject):
         self._lang_notice_key = None
         self._lang_log_key = None
         if self.is_busy() and not self._live_session:
-            self.notice.emit("整片任务正在跑，识别语言更改会在下次任务生效")
+            self.notice.emit(i18n.t("整片任务正在跑，识别语言更改会在下次任务生效"))
 
     def audio_language(self) -> str:
         return langtags.base_of(self._audio_lang())
@@ -916,13 +918,16 @@ class SubtitlePipeline(QObject):
             self._lang_notice_key = notice_key
             if hint != "auto" and tagged and not langtags.same_lang(hint, tagged):
                 self.notice.emit(
-                    f"已按本片指定语言{cfg.lang_display(hint)}转写"
-                    f"（音轨标记是{cfg.lang_display(tagged)}）")
+                    i18n.t("已按本片指定语言{}转写（音轨标记是{}）",
+                           naming.lang_name(cfg.lang_display(hint)),
+                           naming.lang_name(cfg.lang_display(tagged))))
             elif reason == "语音检测" and tagged \
                     and not langtags.same_lang(chosen, tagged):
                 self.notice.emit(
-                    f"音轨标记是{cfg.lang_display(tagged)}，"
-                    f"语音检测为{cfg.lang_display(chosen)}，已按{cfg.lang_display(chosen)}转写")
+                    i18n.t("音轨标记是{}，语音检测为{}，已按{}转写",
+                           naming.lang_name(cfg.lang_display(tagged)),
+                           naming.lang_name(cfg.lang_display(chosen)),
+                           naming.lang_name(cfg.lang_display(chosen))))
         return chosen
 
     def generate_ai(self, live: bool = False, translate: bool = True,
@@ -975,7 +980,7 @@ class SubtitlePipeline(QObject):
             except Exception as exc:
                 # 本地转写不该被翻译密钥卡住：缺接口就降级成只出原文，whisper 照跑。
                 # 早先这里是直接抛，用户点了「整片生成」只看到一句要密钥，转写根本没开始。
-                self.notice.emit(f"没有可用的翻译接口（{exc}）：本轮只转写原文")
+                self.notice.emit(i18n.t("没有可用的翻译接口（{}）：本轮只转写原文", exc))
                 self.mode = "original"
         if self.media_source is not None and self.media_source.is_remote:
             # 语言检测也会走 ffprobe/whisper；token 失效时先换一份再开始
@@ -1056,7 +1061,8 @@ class SubtitlePipeline(QObject):
         with self._cond:
             self._cond.notify_all()
         if worker is not None:
-            self.progress.emit("翻译", sum(1 for value in self.translated if value),
+            self.progress.emit(i18n.t("翻译"),
+                               sum(1 for value in self.translated if value),
                                len(self.cues))
             # 等翻译真正跑完再结束任务；之前的 60 秒超时会让进度块提前消失，
             # 看起来像任务断了，但后台其实还在翻
@@ -1067,38 +1073,40 @@ class SubtitlePipeline(QObject):
         if not cancel.is_set():
             self._render(force=True)
             left = self.untranslated_count() if translator is not None else 0
-            target_name = cfg.lang_display(self.target)
+            target_name = naming.lang_name(cfg.lang_display(self.target))
             if translator is not None:
                 if left:
-                    stage = f"转写完成 · 翻译有 {left} 句未完成"
+                    stage = i18n.t("转写完成 · 翻译有 {} 句未完成", left)
                 else:
-                    stage = "转写 + 翻译完成"
+                    stage = i18n.t("转写 + 翻译完成")
                 self.progress.emit(stage, max(0, len(self.cues) - left),
                                    len(self.cues))
             else:
-                self.progress.emit("转写完成（未翻译）", len(self.cues), len(self.cues))
-            suffix = " + 翻译" if translator is not None else "（未翻译）"
-            extra = f"，其中 {left} 句没有翻成{target_name}" if left else ""
+                self.progress.emit(i18n.t("转写完成（未翻译）"), len(self.cues),
+                                   len(self.cues))
+            suffix = i18n.t(" + 翻译") if translator is not None else i18n.t("（未翻译）")
+            extra = i18n.t("，其中 {} 句没有翻成{}", left, target_name) if left else ""
             self.notice.emit(
-                f"AI 字幕就绪{suffix}：{len(self.cues)} 句 · "
-                f"语言 {self.source.lang or '未知'}{extra}")
+                i18n.t("AI 字幕就绪{}：{} 句 · 语言 {}{}", suffix, len(self.cues),
+                       naming.lang_name(langtags.language_name(self.source.lang))
+                       if self.source.lang else i18n.t("未知"), extra))
             if left:
                 self.error.emit(
-                    f"有 {left} 句模型原样返回、没有翻成{target_name}；"
-                    "建议在 AI 栏换 3B 或更大的翻译模型")
+                    i18n.t("有 {} 句模型原样返回、没有翻成{}；"
+                           "建议在 AI 栏换 3B 或更大的翻译模型", left, target_name))
 
     def translate_generated(self) -> None:
         """翻译已经生成的字幕：直接用内存里的原文，不重新跑 whisper。"""
         if not self.cues:
-            self.error.emit("还没有可翻译的生成字幕，先点「转字幕」")
+            self.error.emit(i18n.t("还没有可翻译的生成字幕，先点「转字幕」"))
             return
         marker = self._read_marker()
         if marker and str(marker.get("origin") or "ai") == "ai" \
                 and not self.transcript_complete():
-            self.error.emit("这份 AI 转写是旧版/不完整（片头可能缺字幕），"
-                            "请点「一键翻译」重新转写后再翻")
+            self.error.emit(i18n.t("这份 AI 转写是旧版/不完整（片头可能缺字幕），"
+                                   "请点「一键翻译」重新转写后再翻"))
             return
-        self.notice.emit(f"已有字幕 {len(self.cues)} 句，直接翻译（不重新转写）")
+        self.notice.emit(i18n.t("已有字幕 {} 句，直接翻译（不重新转写）", len(self.cues)))
         self.target = self.config.get("languages.translation_target", self.target)
         if self.source is None:
             self.source = SourceInfo(list(self.cues), self.whisper.detected_language or "",
@@ -1173,7 +1181,8 @@ class SubtitlePipeline(QObject):
             for index, value in zip(batch, out):
                 self.translated[index] = value
             if not self._asr_running.is_set():
-                self.progress.emit("翻译", sum(1 for v in self.translated if v),
+                self.progress.emit(i18n.t("翻译"),
+                                   sum(1 for v in self.translated if v),
                                    len(self.cues))
             self._render()
         if not cancel.is_set():
@@ -1231,10 +1240,11 @@ class SubtitlePipeline(QObject):
         last_status = 0.0
         current_lang = lang or "auto"
         transient = 0
-        mode_text = "整片（尽可能超前）" if unlimited else f"预读 {lead:.0f} 秒"
+        mode_text = i18n.t("整片（尽可能超前）") if unlimited \
+            else i18n.t("预读 {} 秒", f"{lead:.0f}")
         if self.cloud_live:
-            mode_text = f"云端单流 · 预读 {lead:.0f} 秒"
-        self.notice.emit(f"实时模式已开启：{mode_text}，字幕/翻译尽量做在播放头前面")
+            mode_text = i18n.t("云端单流 · 预读 {} 秒", f"{lead:.0f}")
+        self.notice.emit(i18n.t("实时模式已开启：{}，字幕/翻译尽量做在播放头前面", mode_text))
         while not cancel.is_set():
             lead, unlimited = self._live_lead(cloud_cap)
             position = self.engine.position
@@ -1246,30 +1256,32 @@ class SubtitlePipeline(QObject):
                 current_lang = resolved
                 self._asr_lang_hint = "" if current_lang == "auto" else current_lang
                 self._prioritize_pending(position)
-                label = "自动" if current_lang == "auto" else cfg.lang_display(current_lang)
-                self.notice.emit(f"识别语言已切换为{label}，下一段实时字幕生效")
+                label = i18n.t("自动") if current_lang == "auto" \
+                    else naming.lang_name(cfg.lang_display(current_lang))
+                self.notice.emit(i18n.t("识别语言已切换为{}，下一段实时字幕生效", label))
             if last_position is not None and position < last_position - 1.5:
                 # 往回拖进度条：旧缓冲在播放头后面了，从新位置重新预读
                 last_end = max(0.0, position - 1.0)
                 last_status = 0.0
                 self._prioritize_pending(position)
-                self.notice.emit("实时翻译：检测到回跳，从当前位置重新预读…")
+                self.notice.emit(i18n.t("实时翻译：检测到回跳，从当前位置重新预读…"))
             elif position > last_end + 15.0:     # 往前跳过了缓冲区，丢掉中间空档
                 last_end = max(0.0, position - 1.0)
                 last_status = 0.0
                 self._prioritize_pending(position)
-                self.notice.emit("实时翻译：检测到跳转，从当前位置重新预读…")
+                self.notice.emit(i18n.t("实时翻译：检测到跳转，从当前位置重新预读…"))
             last_position = position
             start = max(last_end - overlap, position - 0.5)
             duration = self.engine.duration
             if duration and start > duration - 0.5:
-                self.notice.emit("实时字幕：已到片尾，停止转写")
+                self.notice.emit(i18n.t("实时字幕：已到片尾，停止转写"))
                 return
             if not unlimited and start > position + lead:   # 预读够了，等播放头追上来
                 if time.time() - last_status > 2.0:
                     self.progress.emit(
-                        f"实时翻译 · 预读 {lead:.0f}s · 已转 {len(self.cues)} 句"
-                        f" · 已翻 {self.translated_count()} 句", len(self.cues), 0)
+                        i18n.t("实时翻译 · 预读 {}s · 已转 {} 句 · 已翻 {} 句",
+                               f"{lead:.0f}", len(self.cues), self.translated_count()),
+                        len(self.cues), 0)
                     last_status = time.time()
                 time.sleep(0.4)
                 continue
@@ -1296,8 +1308,9 @@ class SubtitlePipeline(QObject):
                     cfg.append_log(
                         f"实时转写中断，{delay:.0f}s 后从当前位置重试（{transient}/{limit}）：{text}")
                     self.notice.emit(
-                        f"实时翻译：{'音频流被掐断' if broken else '读取失败'}，"
-                        f"{delay:.0f}s 后从当前位置重试（{transient}/{limit}）…")
+                        i18n.t("实时翻译：{}，{}s 后从当前位置重试（{}/{}）…",
+                               i18n.t("音频流被掐断") if broken else i18n.t("读取失败"),
+                               f"{delay:.0f}", transient, limit))
                     waited = 0.0
                     while waited < delay and not cancel.is_set():
                         time.sleep(0.2)
@@ -1310,10 +1323,10 @@ class SubtitlePipeline(QObject):
                         last_position = pos
                     continue
                 if broken:
-                    self.error.emit(
-                        "实时翻译停了：115 的单流一直在被掐断（两条读流在抢同一条上游）。"
-                        "把「网盘 → OpenList 服务」里的云端预读上限调到 30 秒、或把内存缓存调到 256 MB 再试；"
-                        "长片也可以直接用一键翻译。")
+                    self.error.emit(i18n.t(
+                        "实时翻译停了：云端单流一直在被掐断（两条读流在抢同一条上游）。"
+                        "把「网盘 → 网关服务」里的云端预读上限调到 30 秒、"
+                        "或把内存缓存调到 256 MB 再试；长片也可以直接用一键翻译。"))
                 else:
                     self.error.emit(text)
                 return
@@ -1328,7 +1341,7 @@ class SubtitlePipeline(QObject):
                 for cue in clamped:
                     self._append_cue(cue)
                 last_end = max(cue.end for cue in clamped)
-                self.progress.emit("实时转写", len(self.cues), 0)
+                self.progress.emit(i18n.t("实时转写"), len(self.cues), 0)
                 # 不翻译时也要出字：渲染不能只挂在翻译线程上
                 self._render()
             else:
